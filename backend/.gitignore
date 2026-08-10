@@ -1,0 +1,27 @@
+# dependencies
+/node_modules
+
+# build
+/dist
+
+# env files
+.env
+
+# testing
+/coverage
+
+# logs
+*.log
+npm-debug.log*
+
+# misc
+.DS_Store
+*.pem
+
+# typescript
+*.tsbuildinfo
+
+# prisma
+generated/
+
+/generated/prisma

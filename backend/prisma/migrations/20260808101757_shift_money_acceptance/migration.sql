@@ -1,0 +1,7 @@
+-- AlterTable
+ALTER TABLE "Shift" ADD COLUMN     "expectedMoney" DECIMAL(10,2) NOT NULL DEFAULT 0,
+ADD COLUMN     "paidAt" TIMESTAMP(3),
+ADD COLUMN     "paidById" TEXT;
+
+-- AddForeignKey
+ALTER TABLE "Shift" ADD CONSTRAINT "Shift_paidById_fkey" FOREIGN KEY ("paidById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;

@@ -1,0 +1,373 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  OWNER
+  MANAGER
+  CASHIER
+  WAITER
+  BARMAN
+}
+
+enum OrderStatus {
+  DRAFT
+  SENT
+  COMPLETED
+  CANCELLED
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+enum CancellationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum EditRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  phone        String    @unique
+  passwordHash String
+  role         Role      @default(WAITER)
+  isActive     Boolean   @default(true)
+  refreshToken String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  waiterOrders          Order[]                @relation("OrderWaiter")
+  shifts                Shift[]
+  cancellationRequests  CancellationRequest[]  @relation("CancellationRequestRequester")
+  cancellationBarmanApprovals CancellationRequest[] @relation("CancellationRequestBarman")
+  cancellationDecisions CancellationRequest[]  @relation("CancellationRequestDecider")
+  activityLogs          ActivityLog[]
+  settlementCreated     Settlement[]           @relation("SettlementCreatedBy")
+  settlementClosed      Settlement[]           @relation("SettlementClosedBy")
+  settlementEntries     SettlementEntry[]      @relation("SettlementEntryEmployee")
+  shiftPayments         Shift[]                @relation("ShiftPaidBy")
+  orderEditRequests     OrderEditRequest[]     @relation("OrderEditRequestRequester")
+  orderEditDecisions    OrderEditRequest[]     @relation("OrderEditRequestDecider")
+  stockHandoverManaged  StockHandover[]        @relation("StockHandoverManager")
+  stockHandoverGiven    StockHandover[]        @relation("StockHandoverBarman")
+  stockHandoverClosed   StockHandover[]        @relation("StockHandoverCloser")
+  stockHandoverEvents   StockHandoverEvent[]
+  orderCompletions      Order[]                @relation("OrderCompletedBy")
+
+  @@index([role])
+}
+
+model Category {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  products Product[]
+}
+
+model Product {
+  id            String   @id @default(cuid())
+  name          String
+  categoryId    String
+  price         Decimal  @db.Decimal(10, 2)
+  isAvailable   Boolean  @default(true)
+  stockUnit     String   @default("Piece")
+  piecesPerCase Int?     @default(24)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  category          Category            @relation(fields: [categoryId], references: [id])
+  orderItems        OrderItem[]
+  inventory         Inventory?
+  inventoryMovements InventoryMovement[]
+  sellingUnits      SellingUnit[]
+  handoverItems     StockHandoverItem[]
+
+  @@index([categoryId])
+}
+
+model SellingUnit {
+  id              String   @id @default(cuid())
+  productId       String
+  name            String  // e.g. Bottle / Piece / Half / Double / Shot / 750ml / 1L / 2L
+  price           Decimal @db.Decimal(12, 2)
+  stockConsumption Decimal @db.Decimal(12, 4) // stock units consumed per 1 sale of this unit
+  isDefault       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  product   Product     @relation(fields: [productId], references: [id])
+  orderItems OrderItem[]
+
+  @@unique([productId, name])
+  @@index([productId])
+}
+
+model RestaurantTable {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders Order[]
+}
+
+model Order {
+  id          String      @id @default(cuid())
+  orderNumber Int         @unique @default(autoincrement())
+  status      OrderStatus @default(DRAFT)
+  totalPrice  Decimal     @default(0) @db.Decimal(10, 2)
+  tableId     String?
+  waiterId    String
+  shiftId     String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  sentAt      DateTime?
+  completedAt DateTime?
+  cancelledAt     DateTime?
+  completedById   String?
+
+  table                 RestaurantTable?      @relation(fields: [tableId], references: [id])
+  waiter                User                  @relation("OrderWaiter", fields: [waiterId], references: [id])
+  completedBy           User?                 @relation("OrderCompletedBy", fields: [completedById], references: [id])
+  shift                 Shift?                @relation(fields: [shiftId], references: [id])
+  items                 OrderItem[]
+  cancellationRequests CancellationRequest[]
+  editRequests          OrderEditRequest[]
+  inventoryMovements     InventoryMovement[]
+
+  @@index([waiterId])
+  @@index([completedById])
+  @@index([tableId])
+  @@index([shiftId])
+  @@index([status])
+}
+
+model OrderItem {
+  id               String   @id @default(cuid())
+  orderId          String
+  productId        String?
+  sellingUnitId    String?
+  sellingName      String?
+  stockConsumption Decimal  @default(1) @db.Decimal(12, 4)
+  productName      String
+  unitPrice        Decimal  @db.Decimal(10, 2)
+  quantity         Int      @default(1)
+  subtotal         Decimal  @db.Decimal(10, 2)
+
+  order       Order        @relation(fields: [orderId], references: [id])
+  product     Product?     @relation(fields: [productId], references: [id])
+  sellingUnit SellingUnit? @relation(fields: [sellingUnitId], references: [id])
+
+  @@index([orderId])
+}
+
+model Inventory {
+  id        String  @id @default(cuid())
+  productId String  @unique
+  quantity  Decimal @default(0) @db.Decimal(12, 4)
+  unit      String  @default("unit")
+  updatedAt DateTime @updatedAt
+
+  product   Product             @relation(fields: [productId], references: [id])
+  movements InventoryMovement[]
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String?
+  entityId  String?
+  details   Json?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model Shift {
+  id            String      @id @default(cuid())
+  userId        String
+  status        ShiftStatus @default(OPEN)
+  startedAt     DateTime    @default(now())
+  endedAt       DateTime?
+  expectedMoney Decimal     @default(0) @db.Decimal(10, 2)
+  paidAt        DateTime?
+  paidById      String?
+
+  user   User     @relation(fields: [userId], references: [id])
+  paidBy User?    @relation("ShiftPaidBy", fields: [paidById], references: [id])
+  orders Order[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model StockHandover {
+  id         String   @id @default(cuid())
+  managerId  String?
+  barmanId   String
+  status     String   @default("OPEN") // OPEN -> CLOSED
+  openedAt   DateTime @default(now())
+  closedAt   DateTime?
+  closedById String?
+  createdAt  DateTime @default(now())
+
+  manager  User?               @relation("StockHandoverManager", fields: [managerId], references: [id])
+  barman   User                @relation("StockHandoverBarman", fields: [barmanId], references: [id])
+  closedBy User?               @relation("StockHandoverCloser", fields: [closedById], references: [id])
+  items    StockHandoverItem[]
+  events   StockHandoverEvent[]
+
+  @@index([barmanId, status])
+  @@index([status])
+}
+
+model StockHandoverItem {
+  id          String   @id @default(cuid())
+  handoverId  String
+  productId   String
+  givenQty    Decimal  @db.Decimal(12, 4) // running total of stock units handed to the barman
+  countedQty  Decimal? @db.Decimal(12, 4) // physical count back at close (stock units)
+  consumedQty Decimal? @db.Decimal(12, 4) // given - counted, snapshotted on close
+  variance    Decimal? @db.Decimal(12, 4) // (given - sold) - counted, snapshotted on close
+
+  handover StockHandover @relation(fields: [handoverId], references: [id])
+  product  Product       @relation(fields: [productId], references: [id])
+
+  @@unique([handoverId, productId])
+  @@index([productId])
+}
+
+model StockHandoverEvent {
+  id         String   @id @default(cuid())
+  handoverId String
+  actorId    String
+  action     String   // OPEN | GIVE | CLOSE
+  items      Json?    // [{ productId, qty }] for GIVE events
+  createdAt  DateTime @default(now())
+
+  handover StockHandover @relation(fields: [handoverId], references: [id])
+  actor    User          @relation(fields: [actorId], references: [id])
+
+  @@index([handoverId])
+  @@index([createdAt])
+}
+
+model CancellationRequest {
+  id            String              @id @default(cuid())
+  orderId       String              @unique
+  requestedById String
+  status        CancellationStatus  @default(PENDING)
+  reason        String?
+  barmanId      String?
+  barmanDecidedAt DateTime?
+  decidedById   String?
+  decidedAt     DateTime?
+  createdAt     DateTime            @default(now())
+
+  order       Order  @relation(fields: [orderId], references: [id])
+  requestedBy User   @relation("CancellationRequestRequester", fields: [requestedById], references: [id])
+  barman      User?  @relation("CancellationRequestBarman", fields: [barmanId], references: [id])
+  decidedBy   User?  @relation("CancellationRequestDecider", fields: [decidedById], references: [id])
+
+  @@index([status])
+}
+
+model OrderEditRequest {
+  id            String            @id @default(cuid())
+  orderId       String
+  requestedById String
+  items         Json
+  status        EditRequestStatus @default(PENDING)
+  createdAt     DateTime          @default(now())
+  decidedById   String?
+  decidedAt     DateTime?
+
+  order       Order  @relation(fields: [orderId], references: [id])
+  requestedBy User   @relation("OrderEditRequestRequester", fields: [requestedById], references: [id])
+  decidedBy   User?  @relation("OrderEditRequestDecider", fields: [decidedById], references: [id])
+
+  @@index([orderId, status])
+  @@index([status])
+}
+
+model InventoryMovement {
+  id            String   @id @default(cuid())
+  inventoryId   String
+  productId     String
+  productName   String
+  change        Decimal  @db.Decimal(12, 4)
+  quantityAfter Decimal  @db.Decimal(12, 4)
+  reason        String
+  orderId       String?
+  actorId       String?
+  createdAt     DateTime @default(now())
+
+  inventory Inventory @relation(fields: [inventoryId], references: [id])
+  product   Product   @relation(fields: [productId], references: [id])
+  order     Order?    @relation(fields: [orderId], references: [id])
+
+  @@index([inventoryId])
+  @@index([createdAt])
+}
+
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model Settlement {
+  id          String   @id @default(cuid())
+  date        String   @unique
+  status      String   @default("OPEN")
+  createdById String?
+  closedById  String?
+  createdAt   DateTime @default(now())
+  closedAt    DateTime?
+
+  createdBy User?              @relation("SettlementCreatedBy", fields: [createdById], references: [id])
+  closedBy  User?              @relation("SettlementClosedBy", fields: [closedById], references: [id])
+  entries   SettlementEntry[]
+
+  @@index([date])
+}
+
+model SettlementEntry {
+  id           String  @id @default(cuid())
+  settlementId String
+  employeeId   String
+  expected     Decimal @default(0) @db.Decimal(10, 2)
+  collected    Decimal? @db.Decimal(10, 2)
+  updatedAt    DateTime @updatedAt
+
+  settlement Settlement @relation(fields: [settlementId], references: [id])
+  employee   User       @relation("SettlementEntryEmployee", fields: [employeeId], references: [id])
+
+  @@unique([settlementId, employeeId])
+  @@index([settlementId])
+}
