@@ -1,17 +1,25 @@
 'use client';
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import AppShell from '@/components/AppShell';
 import { Alert, Badge, Button, Card, EmptyState } from '@/components/ui';
 import { useAuth } from '@/context/AuthContext';
 import { api } from '@/services/api';
-import type { Settlement, SettlementEntry, Shift } from '@/types';
+import type { Role, Settlement, SettlementEntry, Shift } from '@/types';
 
 export default function SettlementsPage() {
   const { user } = useAuth();
-  const canAccept = user?.role === 'CASHIER' || user?.role === 'MANAGER';
-  const canViewShifts = canAccept || user?.role === 'OWNER';
+  const canAccept = user?.role === 'CASHIER' || user?.role === 'MANAGER' || user?.role === 'OWNER';
+  const canViewShifts = canAccept;
   const canManage = user?.role === 'MANAGER' || user?.role === 'OWNER';
+
+  const acceptTargets: Record<Role, Role | null> = {
+    CASHIER: 'WAITER',
+    MANAGER: 'CASHIER',
+    OWNER: 'MANAGER',
+    WAITER: null,
+    BARMAN: null,
+  };
 
   const [today, setToday] = useState<Settlement | null>(null);
   const [shifts, setShifts] = useState<Shift[]>([]);
@@ -47,7 +55,7 @@ export default function SettlementsPage() {
     setBusy(true);
     try {
       await api.acceptShift(s.id);
-      setNotice(`${s.user?.name ?? 'Waiter'} money accepted.`);
+      setNotice(`${s.user?.name ?? 'Employee'} money accepted.`);
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
@@ -73,6 +81,36 @@ export default function SettlementsPage() {
   }
 
   const remaining = (today?.expected ?? 0) - (today?.collected ?? 0);
+
+  const chain = useMemo(() => {
+    const sum = (rows: Shift[]) =>
+      rows.reduce((acc, r) => acc + Number(r.expectedMoney ?? 0), 0);
+    const waiters = shifts.filter((s) => s.user?.role === 'WAITER');
+    const cashiers = shifts.filter((s) => s.user?.role === 'CASHIER');
+    const managers = shifts.filter((s) => s.user?.role === 'MANAGER');
+    return [
+      {
+        label: 'Waiters gave to cashier',
+        given: sum(waiters.filter((s) => s.paidAt)),
+        outstanding: sum(waiters.filter((s) => !s.paidAt)),
+      },
+      {
+        label: 'Cashier gave to manager',
+        given: sum(cashiers.filter((s) => s.paidAt)),
+        outstanding: sum(cashiers.filter((s) => !s.paidAt)),
+      },
+      {
+        label: 'Manager gave to owner',
+        given: sum(managers.filter((s) => s.paidAt)),
+        outstanding: sum(managers.filter((s) => !s.paidAt)),
+      },
+    ];
+  }, [shifts]);
+
+  const canAcceptRow = (s: Shift) =>
+    canAccept &&
+    s.user?.id !== user?.id &&
+    acceptTargets[user!.role] === s.user?.role;
 
   return (
     <AppShell>
@@ -118,7 +156,7 @@ export default function SettlementsPage() {
 
           <Card title={today.isClosed ? 'Day closed — summary' : 'Money to give'}>
             {shifts.length === 0 ? (
-              <EmptyState>No waiter shifts closed yet today.</EmptyState>
+              <EmptyState>No shifts closed yet today.</EmptyState>
             ) : (
               <>
                 <ul className="divide-y divide-zinc-100">
@@ -127,23 +165,23 @@ export default function SettlementsPage() {
                       key={s.id}
                       className="flex flex-wrap items-center justify-between gap-3 py-3"
                     >
-                      <div>
-                        <p className="font-medium text-zinc-900">
-                          {s.user?.name ?? 'Waiter'}
-                        </p>
-                        <p className="text-xs text-zinc-400">
-                          Money to give: {Number(s.expectedMoney ?? 0).toFixed(2)}
-                        </p>
-                      </div>
+                      <p className="font-medium text-zinc-900">
+                        {s.user?.name ?? 'Employee'}{' '}
+                        <span className="font-normal text-zinc-500">
+                          ({s.user?.role ?? ''})
+                        </span>{' '}
+                        <span className="font-normal text-zinc-500">
+                          money to give:
+                        </span>{' '}
+                        <span className="font-semibold text-zinc-900">
+                          {Number(s.expectedMoney ?? 0).toFixed(2)}
+                        </span>
+                      </p>
                       {s.paidAt ? (
                         <span className="text-sm font-semibold text-green-600">
                           Accepted
                         </span>
-                      ) : today.isClosed ? (
-                        <span className="text-sm font-semibold text-amber-600">
-                          Not accepted
-                        </span>
-                      ) : canAccept ? (
+                      ) : canAcceptRow(s) ? (
                         <Button
                           variant="secondary"
                           onClick={() => acceptShift(s)}
@@ -154,7 +192,7 @@ export default function SettlementsPage() {
                         </Button>
                       ) : (
                         <span className="text-sm font-medium text-amber-600">
-                          Not accepted
+                          Not given
                         </span>
                       )}
                     </li>
@@ -182,6 +220,32 @@ export default function SettlementsPage() {
           </Card>
         </>
       )}
+
+      {canViewShifts ? (
+        <Card title="Money chain — should tie" className="mt-6">
+          <ul className="space-y-2">
+            {chain.map((c) => (
+              <li
+                key={c.label}
+                className="flex flex-wrap items-center justify-between gap-2 text-sm"
+              >
+                <span className="font-medium text-zinc-900">{c.label}</span>
+                <span className="text-zinc-500">
+                  <span className="font-semibold text-zinc-900">
+                    {c.given.toFixed(2)}
+                  </span>{' '}
+                  given
+                  {c.outstanding > 0 ? (
+                    <span className="ml-2 font-medium text-amber-600">
+                      + {c.outstanding.toFixed(2)} outstanding
+                    </span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ) : null}
 
       {canManage ? (
         <Card title="Recent settlements" className="mt-6">
