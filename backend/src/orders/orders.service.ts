@@ -52,6 +52,9 @@ export class OrdersService {
       where: { userId, status: ShiftStatus.OPEN },
       select: { id: true },
     });
+    if (!shift) {
+      throw new BadRequestException('You must clock in before taking orders');
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const order = await tx.order.create({
@@ -139,11 +142,7 @@ export class OrdersService {
     if (!product) {
       throw new NotFoundException('Product not found');
     }
-    const sell = await this.resolveSelling(
-      tx,
-      product.id,
-      dto.sellingUnitId,
-    );
+    const sell = await this.resolveSelling(tx, product.id, dto.sellingUnitId);
 
     const existing = await tx.orderItem.findFirst({
       where: {
@@ -261,12 +260,15 @@ export class OrdersService {
     });
   }
 
-  async complete(orderId: string, actorId: string) {
+  async complete(orderId: string, actorId: string, actorRole?: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
     });
     if (!order) {
       throw new NotFoundException('Order not found');
+    }
+    if (actorRole === Role.BARMAN) {
+      await this.assertBarmanHasStock(actorId, orderId);
     }
     if (order.status === OrderStatus.COMPLETED) {
       throw new ConflictException('This order was already completed');
@@ -281,7 +283,11 @@ export class OrdersService {
       // this guarded update and receive a conflict response.
       const claimed = await tx.order.updateMany({
         where: { id: orderId, status: OrderStatus.SENT },
-        data: { status: OrderStatus.COMPLETED, completedAt: new Date() },
+        data: {
+          status: OrderStatus.COMPLETED,
+          completedAt: new Date(),
+          completedById: actorId,
+        },
       });
       if (claimed.count !== 1) {
         throw new ConflictException(
@@ -297,8 +303,7 @@ export class OrdersService {
         });
         if (!inv) continue;
 
-        const need =
-          item.quantity * (Number(item.stockConsumption) || 1);
+        const need = item.quantity * (Number(item.stockConsumption) || 1);
 
         // Atomic guarded decrement: only subtracts while enough stock remains,
         // so inventory never silently goes negative. A shortage throws and
@@ -349,8 +354,87 @@ export class OrdersService {
         'inventory.updated',
         {},
       );
+      this.realtime.emitToRoles(
+        [Role.MANAGER, Role.OWNER],
+        'handover.changed',
+        {
+          orderId,
+        },
+      );
+      this.realtime.emitToUser(actorId, 'handover.changed', { orderId });
       return orderWithItems;
     });
+  }
+
+  /**
+   * A barman may only complete an order for items they actually hold in their
+   * open stock balance (given by the manager, minus what they already sold).
+   * Otherwise a barman who was never handed the drink could sell it and drain
+   * the warehouse, pushing their balance negative. The manager is exempt — the
+   * manager is the one who hands stock over.
+   */
+  private async assertBarmanHasStock(barmanId: string, orderId: string) {
+    const handover = await this.prisma.stockHandover.findFirst({
+      where: { barmanId, status: 'OPEN' },
+      select: {
+        openedAt: true,
+        items: { select: { productId: true, givenQty: true } },
+      },
+    });
+    if (!handover) {
+      throw new BadRequestException(
+        'You have no open stock — clock in first and ask the manager to hand you stock.',
+      );
+    }
+
+    const orderItems = await this.prisma.orderItem.findMany({
+      where: { orderId },
+      select: {
+        productId: true,
+        quantity: true,
+        stockConsumption: true,
+        productName: true,
+        sellingName: true,
+      },
+    });
+
+    const soldRows = await this.prisma.orderItem.findMany({
+      where: {
+        order: {
+          status: OrderStatus.COMPLETED,
+          completedById: barmanId,
+          completedAt: { gte: handover.openedAt },
+        },
+      },
+      select: { productId: true, quantity: true, stockConsumption: true },
+    });
+    const sold = new Map<string, number>();
+    for (const row of soldRows) {
+      if (!row.productId) continue;
+      sold.set(
+        row.productId,
+        (sold.get(row.productId) ?? 0) +
+          row.quantity * (Number(row.stockConsumption) || 1),
+      );
+    }
+
+    const given = new Map(
+      handover.items.map((it) => [it.productId, Number(it.givenQty)]),
+    );
+
+    for (const item of orderItems) {
+      if (!item.productId) continue;
+      const need = item.quantity * (Number(item.stockConsumption) || 1);
+      const balance =
+        (given.get(item.productId) ?? 0) - (sold.get(item.productId) ?? 0);
+      if (balance < need) {
+        throw new BadRequestException(
+          `You have no stock for "${item.productName}"${
+            item.sellingName ? ` (${item.sellingName})` : ''
+          }. Ask the manager to hand it over first.`,
+        );
+      }
+    }
   }
 
   async requestCancellation(
@@ -380,9 +464,7 @@ export class OrdersService {
       where: { orderId, status: CancellationStatus.PENDING },
     });
     if (pending) {
-      throw new ConflictException(
-        'A cancellation request is already pending',
-      );
+      throw new ConflictException('A cancellation request is already pending');
     }
     const request = await this.prisma.cancellationRequest.create({
       data: {
@@ -447,7 +529,8 @@ export class OrdersService {
               where: { productId: item.productId },
               data: {
                 quantity: {
-                  increment: item.quantity * (Number(item.stockConsumption) || 1),
+                  increment:
+                    item.quantity * (Number(item.stockConsumption) || 1),
                 },
               },
             });
@@ -542,10 +625,11 @@ export class OrdersService {
               await tx.inventory.updateMany({
                 where: { productId: item.productId },
                 data: {
-                quantity: {
-                  increment: item.quantity * (Number(item.stockConsumption) || 1),
+                  quantity: {
+                    increment:
+                      item.quantity * (Number(item.stockConsumption) || 1),
+                  },
                 },
-              },
               });
             }
           }
@@ -604,7 +688,9 @@ export class OrdersService {
         productId: item.productId,
         quantity: item.quantity,
         productName: product.name,
-        unitPrice: sell.unitPrice ? Number(sell.unitPrice) : Number(product.price),
+        unitPrice: sell.unitPrice
+          ? Number(sell.unitPrice)
+          : Number(product.price),
         sellingUnitId: item.sellingUnitId ?? null,
         sellingName: sell.sellingName,
         stockConsumption: sell.stockConsumption,
@@ -714,10 +800,11 @@ export class OrdersService {
               await tx.inventory.updateMany({
                 where: { productId: item.productId },
                 data: {
-                quantity: {
-                  increment: item.quantity * (Number(item.stockConsumption) || 1),
+                  quantity: {
+                    increment:
+                      item.quantity * (Number(item.stockConsumption) || 1),
+                  },
                 },
-              },
               });
             }
           }
@@ -808,17 +895,11 @@ export class OrdersService {
   }
 
   private emitOrderRelated(orderId: string, event: string) {
-    this.realtime.emitToRoles(
-      [Role.WAITER, Role.BARMAN, Role.CASHIER],
-      event,
-      { orderId },
-    );
+    this.realtime.emitToRoles([Role.WAITER, Role.BARMAN, Role.CASHIER], event, {
+      orderId,
+    });
     // Managers and owners watch live dashboards and notification feeds.
-    this.realtime.emitToRoles(
-      [Role.MANAGER, Role.OWNER],
-      event,
-      { orderId },
-    );
+    this.realtime.emitToRoles([Role.MANAGER, Role.OWNER], event, { orderId });
     this.realtime.emitToRoles(
       [Role.MANAGER, Role.OWNER],
       'dashboard.updated',

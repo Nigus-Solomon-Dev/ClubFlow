@@ -8,7 +8,11 @@ function buildTx() {
       updateMany: jest.fn(),
     },
     orderItem: { findMany: jest.fn() },
-    inventory: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
+    inventory: {
+      findUnique: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+    },
     inventoryMovement: { create: jest.fn() },
     activityLog: { create: jest.fn() },
   };
@@ -18,13 +22,27 @@ function buildPrisma() {
   const tx = buildTx();
   const prisma = {
     order: { findUnique: jest.fn() },
-    orderItem: { findMany: jest.fn(), aggregate: jest.fn(), update: jest.fn(), delete: jest.fn() },
-    inventory: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
+    orderItem: {
+      findMany: jest.fn(),
+      aggregate: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
+    inventory: {
+      findUnique: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+    },
     inventoryMovement: { create: jest.fn() },
     activityLog: { create: jest.fn() },
     restaurantTable: { findUnique: jest.fn() },
     product: { findUnique: jest.fn() },
-    cancellationRequest: { findFirst: jest.fn(), create: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
+    cancellationRequest: {
+      findFirst: jest.fn(),
+      create: jest.fn(),
+      findUnique: jest.fn(),
+      update: jest.fn(),
+    },
     $transaction: jest.fn((cb) => cb(tx)),
   };
   return { tx, prisma };
@@ -34,13 +52,13 @@ describe('OrdersService.complete', () => {
   let service: OrdersService;
   let tx: ReturnType<typeof buildTx>;
   let prisma: ReturnType<typeof buildPrisma>['prisma'];
-  let realtime: { emitToRoles: jest.Mock };
+  let realtime: { emitToRoles: jest.Mock; emitToUser: jest.Mock };
 
   beforeEach(() => {
     const built = buildPrisma();
     tx = built.tx;
     prisma = built.prisma;
-    realtime = { emitToRoles: jest.fn() };
+    realtime = { emitToRoles: jest.fn(), emitToUser: jest.fn() };
     service = new OrdersService(prisma as never, realtime as never);
   });
 
@@ -48,7 +66,11 @@ describe('OrdersService.complete', () => {
     prisma.order.findUnique.mockResolvedValue({ id: 'o1', status: 'SENT' });
     tx.order.updateMany.mockResolvedValue({ count: 1 });
     tx.orderItem.findMany.mockResolvedValue([]);
-    tx.order.findUnique.mockResolvedValue({ id: 'o1', orderNumber: 1, totalPrice: 0 });
+    tx.order.findUnique.mockResolvedValue({
+      id: 'o1',
+      orderNumber: 1,
+      totalPrice: 0,
+    });
 
     await service.complete('o1', 'u1');
 
@@ -64,7 +86,9 @@ describe('OrdersService.complete', () => {
 
   it('rejects completing a non-SENT order', async () => {
     prisma.order.findUnique.mockResolvedValue({ id: 'o1', status: 'DRAFT' });
-    await expect(service.complete('o1', 'u1')).rejects.toThrow(/Only a SENT order/);
+    await expect(service.complete('o1', 'u1')).rejects.toThrow(
+      /Only a SENT order/,
+    );
     expect(tx.order.updateMany).not.toHaveBeenCalled();
   });
 
@@ -73,7 +97,9 @@ describe('OrdersService.complete', () => {
     // The atomically guarded claim finds the order already moved on.
     tx.order.updateMany.mockResolvedValue({ count: 0 });
 
-    await expect(service.complete('o1', 'u1')).rejects.toThrow(/already completed/);
+    await expect(service.complete('o1', 'u1')).rejects.toThrow(
+      /already completed/,
+    );
     expect(tx.activityLog.create).not.toHaveBeenCalled();
   });
 
@@ -118,12 +144,17 @@ describe('OrdersService.complete', () => {
       { productId: 'p1', productName: 'beer', quantity: 5 },
     ]);
     // Only 3 in stock, and #not applied by the guarded update.
-    tx.inventory.findUnique
-      .mockResolvedValueOnce({ id: 'inv1', productId: 'p1', quantity: 3 });
+    tx.inventory.findUnique.mockResolvedValueOnce({
+      id: 'inv1',
+      productId: 'p1',
+      quantity: 3,
+    });
     tx.inventory.updateMany.mockResolvedValue({ count: 0 });
     tx.activityLog.create.mockResolvedValue({});
 
-    await expect(service.complete('o1', 'u1')).rejects.toThrow(/Insufficient stock/);
+    await expect(service.complete('o1', 'u1')).rejects.toThrow(
+      /Insufficient stock/,
+    );
     expect(tx.inventoryMovement.create).not.toHaveBeenCalled();
     expect(tx.activityLog.create).not.toHaveBeenCalled();
   });

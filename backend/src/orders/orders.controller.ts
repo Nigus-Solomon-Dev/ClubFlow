@@ -137,8 +137,11 @@ export class OrdersController {
 
   @Post(':id/complete')
   @Roles(Role.BARMAN, Role.MANAGER)
-  complete(@Param('id') id: string, @CurrentUser('id') actorId: string) {
-    return this.ordersService.complete(id, actorId);
+  complete(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string; role: string },
+  ) {
+    return this.ordersService.complete(id, user.id, user.role);
   }
 
   @Post(':id/cancel')
