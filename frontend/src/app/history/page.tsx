@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import AppShell from '@/components/AppShell';
-import { Alert, Card, EmptyState } from '@/components/ui';
+import { Alert, Button, Card, EmptyState } from '@/components/ui';
 import {
   CancelModal,
   EditOrderModal,
@@ -13,7 +13,8 @@ import { useAuth } from '@/context/AuthContext';
 import { useRealtime } from '@/hooks/useRealtime';
 import { api } from '@/services/api';
 import { REAL_TIME_EVENTS } from '@/services/realtime';
-import type { Order, Product, Shift } from '@/types';
+import StockItemsList from '@/components/stock/StockItemsList';
+import type { Order, StockHandover } from '@/types';
 
 export default function HistoryPage() {
   const { user } = useAuth();
@@ -43,136 +44,16 @@ function useOrders() {
   return { orders, error, reload };
 }
 
-function ItemTotals({ orders, inHand }: { orders: Order[]; inHand: boolean }) {
-  const [q, setQ] = useState('');
-  const [products, setProducts] = useState<Product[]>([]);
-
-  useEffect(() => {
-    api
-      .products()
-      .then(setProducts)
-      .catch(() => undefined);
-  }, []);
-
-  const served = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const o of orders) {
-      if (o.status === 'COMPLETED') {
-        for (const it of o.items ?? []) {
-          map.set(it.productName, (map.get(it.productName) ?? 0) + it.quantity);
-        }
-      }
-    }
-    return map;
-  }, [orders]);
-
-  const hand = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const o of orders) {
-      if (o.status === 'SENT') {
-        for (const it of o.items ?? []) {
-          map.set(it.productName, (map.get(it.productName) ?? 0) + it.quantity);
-        }
-      }
-    }
-    return map;
-  }, [orders]);
-
-  const rows = useMemo(() => {
-    const merged = new Map<
-      string,
-      { name: string; served: number; hand: number }
-    >();
-    for (const p of products) {
-      merged.set(p.name.toLowerCase(), {
-        name: p.name,
-        served: served.get(p.name) ?? 0,
-        hand: hand.get(p.name) ?? 0,
-      });
-    }
-    for (const [name] of served) {
-      const key = name.toLowerCase();
-      if (!merged.has(key)) {
-        merged.set(key, {
-          name,
-          served: served.get(name) ?? 0,
-          hand: hand.get(name) ?? 0,
-        });
-      }
-    }
-
-    const all = [...merged.values()];
-    if (q.trim() === '') {
-      return all
-        .filter((r) => r.served > 0 || r.hand > 0)
-        .sort((a, b) => b.served - a.served);
-    }
-    const needle = q.trim().toLowerCase();
-    return all
-      .filter((r) => r.name.toLowerCase().includes(needle))
-      .sort((a, b) => b.served - a.served);
-  }, [products, served, hand, q]);
-
-  return (
-    <Card title="Items" className="mb-6">
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="Search an item, e.g. Sambuca"
-        className="mb-4 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500"
-      />
-      {rows.length === 0 ? (
-        <EmptyState>No items match your search.</EmptyState>
-      ) : (
-        <ul className="divide-y divide-zinc-100">
-          {rows.map(({ name, served: servedQty, hand: handQty }) => (
-            <li
-              key={name}
-              className="flex flex-col gap-1.5 py-3 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <span className="font-medium text-zinc-900">{name}</span>
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-                <span className="text-zinc-500">
-                  Served:{' '}
-                  <span className="font-semibold text-zinc-900">{servedQty}</span>
-                </span>
-                {inHand ? (
-                  <span className="text-zinc-500">
-                    In hand:{' '}
-                    <span className="font-semibold text-zinc-900">{handQty}</span>
-                  </span>
-                ) : null}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Card>
-  );
-}
-
 function WaiterHistory() {
   const { user } = useAuth();
   const { orders, error, reload } = useOrders();
   const [cancelOrder, setCancelOrder] = useState<Order | null>(null);
   const [editOrder, setEditOrder] = useState<Order | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [shifts, setShifts] = useState<Shift[]>([]);
 
   const refresh = useCallback(() => {
     reload();
-    api
-      .shifts()
-      .then(setShifts)
-      .catch(() => undefined);
   }, [reload]);
-
-  useEffect(() => {
-    api
-      .shifts()
-      .then(setShifts)
-      .catch(() => undefined);
-  }, []);
 
   useRealtime(
     [
@@ -183,17 +64,6 @@ function WaiterHistory() {
     refresh,
   );
 
-  const paidWindows = useMemo(
-    () =>
-      (shifts ?? [])
-        .filter((s) => s.status === 'CLOSED' && !!s.paidAt)
-        .map((s) => ({
-          start: new Date(s.startedAt).getTime(),
-          end: new Date(s.endedAt ?? s.startedAt).getTime(),
-        })),
-    [shifts],
-  );
-
   const mine = useMemo(
     () =>
       orders.filter((o) => o.waiter?.id === user?.id && o.status !== 'DRAFT'),
@@ -201,18 +71,8 @@ function WaiterHistory() {
   );
 
   const visible = useMemo(
-    () =>
-      mine.filter((o) => {
-        if (o.shift) {
-          return !o.shift.paidAt;
-        }
-        if (o.status === 'COMPLETED' || o.status === 'CANCELLED') {
-          const t = new Date(o.createdAt).getTime();
-          if (paidWindows.some((w) => t >= w.start && t <= w.end)) return false;
-        }
-        return true;
-      }),
-    [mine, paidWindows],
+    () => mine.filter((o) => o.shift && o.shift.status === 'OPEN'),
+    [mine],
   );
 
   const pocketMoney = useMemo(
@@ -221,6 +81,14 @@ function WaiterHistory() {
         .filter((o) => o.status === 'COMPLETED')
         .reduce((s, o) => s + Number(o.totalPrice), 0),
     [visible],
+  );
+
+  const history = useMemo(
+    () =>
+      mine.slice().sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      ),
+    [mine],
   );
 
   async function submitCancel(reason: string) {
@@ -247,11 +115,11 @@ function WaiterHistory() {
       </div>
 
       <Card title="All my orders">
-        {visible.length === 0 ? (
+        {history.length === 0 ? (
           <EmptyState>No orders yet — build one in POS.</EmptyState>
         ) : (
           <OrderTable
-            orders={visible}
+            orders={history}
             onCancel={setCancelOrder}
             onEdit={setEditOrder}
           />
@@ -285,8 +153,124 @@ function WaiterHistory() {
   );
 }
 
+function BarmanStockCard() {
+  const [handovers, setHandovers] = useState<StockHandover[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(() => {
+    api
+      .stockHandoverMine()
+      .then((h) => {
+        setHandovers(h);
+        setError(null);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'));
+  }, []);
+
+  useEffect(reload, [reload]);
+  useRealtime(
+    [
+      REAL_TIME_EVENTS.handoverChanged,
+      REAL_TIME_EVENTS.shiftClosed,
+      REAL_TIME_EVENTS.shiftOpened,
+    ],
+    reload,
+  );
+
+  const open = handovers.find((h) => h.status === 'OPEN');
+  const closed = useMemo(
+    () =>
+      handovers
+        .filter((h) => h.status === 'CLOSED')
+        .sort(
+          (a, b) =>
+            new Date(b.closedAt ?? b.openedAt).getTime() -
+            new Date(a.closedAt ?? a.openedAt).getTime(),
+        ),
+    [handovers],
+  );
+
+  const latest = open ?? closed.find((h) => !h.acceptedAt);
+
+  async function clockIn() {
+    setError(null);
+    setBusy(true);
+    try {
+      await api.openShift();
+      reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to clock in');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clockOut() {
+    setError(null);
+    setBusy(true);
+    try {
+      await api.closeShift();
+      reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to clock out');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="My stock" className="mb-6">
+      {error ? (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
+        </div>
+      ) : null}
+
+      {!latest ? (
+        <div className="py-2 text-center">
+          <p className="mb-4 text-sm text-zinc-500">
+            You are not on duty yet. The manager can only give you stock after
+            you clock in.
+          </p>
+          <Button onClick={clockIn} disabled={busy}>
+            {busy ? 'Opening…' : 'Clock in / open my stock'}
+          </Button>
+        </div>
+      ) : (
+        <>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm text-zinc-600">
+              {open ? 'On duty since' : 'Closed'}{' '}
+              <span className="font-semibold text-zinc-900">
+                {new Date(
+                  open ? open.openedAt : (latest.closedAt ?? latest.openedAt),
+                ).toLocaleString()}
+              </span>
+            </p>
+            {open ? (
+              <Button variant="secondary" onClick={clockOut} disabled={busy}>
+                {busy ? 'Closing…' : 'Clock out'}
+              </Button>
+            ) : latest.acceptedAt ? (
+              <span className="rounded-full border border-green-200 bg-green-50 px-3 py-1 text-xs font-semibold text-green-700">
+                Accepted
+              </span>
+            ) : (
+              <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                Waiting for the manager to count &amp; accept
+              </span>
+            )}
+          </div>
+          <StockItemsList handover={latest} limit={3} />
+        </>
+      )}
+    </Card>
+  );
+}
+
 function BarmanHistory() {
-  const { orders, error } = useOrders();
+  const { orders, error, reload } = useOrders();
 
   const today = useMemo(
     () =>
@@ -303,11 +287,16 @@ function BarmanHistory() {
     [orders],
   );
 
+  useRealtime(
+    [REAL_TIME_EVENTS.orderUpdated, REAL_TIME_EVENTS.handoverChanged],
+    reload,
+  );
+
   return (
     <div>
       {error ? <div className="mb-4"><Alert>{error}</Alert></div> : null}
 
-      <ItemTotals orders={orders} inHand />
+      <BarmanStockCard />
 
       <Card title="Today's orders">
         {today.length === 0 ? (

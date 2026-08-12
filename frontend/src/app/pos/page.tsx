@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import AppShell from '@/components/AppShell';
+import ClockInGate from '@/components/ClockInGate';
 import { OrderRow } from '@/components/orders';
 import { Alert, Button, Card, EmptyState } from '@/components/ui';
 import { useAuth } from '@/context/AuthContext';
 import { useRealtime } from '@/hooks/useRealtime';
 import { api } from '@/services/api';
 import { REAL_TIME_EVENTS } from '@/services/realtime';
-import type { Order, Product, RestaurantTable, SellingUnit, Shift } from '@/types';
+import type { Order, Product, RestaurantTable, SellingUnit } from '@/types';
 
 interface CartLine {
   key: string;
@@ -35,6 +36,7 @@ export default function PosPage() {
       REAL_TIME_EVENTS.orderEditDecided,
       REAL_TIME_EVENTS.shiftAccepted,
       REAL_TIME_EVENTS.shiftOpened,
+      REAL_TIME_EVENTS.shiftClosed,
       REAL_TIME_EVENTS.inventoryUpdated,
     ],
     reload,
@@ -42,11 +44,13 @@ export default function PosPage() {
 
   return (
     <AppShell>
-      {isWaiter ? (
-        <WaiterPos key={reloadKey} onChanged={reload} />
-      ) : (
-        <StaffPos key={reloadKey} />
-      )}
+      <ClockInGate>
+        {isWaiter ? (
+          <WaiterPos key={reloadKey} onChanged={reload} />
+        ) : (
+          <StaffPos key={reloadKey} />
+        )}
+      </ClockInGate>
     </AppShell>
   );
 }
@@ -61,7 +65,6 @@ function WaiterPos({ onChanged }: { onChanged: () => void }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [tables, setTables] = useState<RestaurantTable[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [shifts, setShifts] = useState<Shift[]>([]);
   const [tableId, setTableId] = useState('');
   const [menuQ, setMenuQ] = useState('');
   const [cart, setCart] = useState<CartLine[]>([]);
@@ -70,43 +73,25 @@ function WaiterPos({ onChanged }: { onChanged: () => void }) {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([api.products(), api.tables(), api.orders(), api.shifts()])
-      .then(([p, t, o, s]) => {
+    Promise.all([api.products(), api.tables(), api.orders()])
+      .then(([p, t, o]) => {
         setProducts(p);
         setTables(t);
         setOrders(o);
-        setShifts(s);
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'));
   }, []);
-
-  const paidWindows = useMemo(
-    () =>
-      (shifts ?? [])
-        .filter((s) => s.status === 'CLOSED' && !!s.paidAt)
-        .map((s) => ({
-          start: new Date(s.startedAt).getTime(),
-          end: new Date(s.endedAt ?? s.startedAt).getTime(),
-        })),
-    [shifts],
-  );
 
   const pocketMoney = useMemo(() => {
     const mine = orders.filter(
       (o) => o.waiter?.id === user?.id && o.status !== 'DRAFT',
     );
-    const inPocket = mine.filter((o) => {
-      if (o.shift) return !o.shift.paidAt;
-      if (o.status === 'COMPLETED' || o.status === 'CANCELLED') {
-        const t = new Date(o.createdAt).getTime();
-        if (paidWindows.some((w) => t >= w.start && t <= w.end)) return false;
-      }
-      return true;
-    });
-    return inPocket
-      .filter((o) => o.status === 'COMPLETED')
+    return mine
+      .filter(
+        (o) => o.shift && o.shift.status === 'OPEN' && o.status === 'COMPLETED',
+      )
       .reduce((s, o) => s + Number(o.totalPrice), 0);
-  }, [orders, user, paidWindows]);
+  }, [orders, user]);
 
   function addToCart(product: Product, unit?: SellingUnit) {
     const u =
