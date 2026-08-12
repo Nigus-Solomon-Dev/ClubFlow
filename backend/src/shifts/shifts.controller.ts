@@ -22,20 +22,23 @@ export class ShiftsController {
   @Post('open')
   @Roles(Role.MANAGER, Role.CASHIER, Role.BARMAN, Role.WAITER)
   @HttpCode(HttpStatus.CREATED)
-  open(@CurrentUser('id') userId: string) {
-    return this.shiftsService.open(userId);
+  open(@CurrentUser() user: { id: string; role: string }) {
+    return this.shiftsService.open(user.id, user.role);
   }
 
   @Post('close')
   @Roles(Role.MANAGER, Role.CASHIER, Role.BARMAN, Role.WAITER)
-  close(@CurrentUser('id') userId: string) {
-    return this.shiftsService.close(userId);
+  close(@CurrentUser() user: { id: string; role: string }) {
+    return this.shiftsService.close(user.id, user.role);
   }
 
   @Post(':id/accept')
-  @Roles(Role.CASHIER, Role.MANAGER)
-  accept(@Param('id') id: string, @CurrentUser('id') actorId: string) {
-    return this.shiftsService.accept(id, actorId);
+  @Roles(Role.CASHIER, Role.MANAGER, Role.OWNER)
+  accept(
+    @Param('id') id: string,
+    @CurrentUser() user: { id: string; role: string },
+  ) {
+    return this.shiftsService.accept(id, user);
   }
 
   @Get('today')
