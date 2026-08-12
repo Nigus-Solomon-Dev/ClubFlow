@@ -56,7 +56,11 @@ export class InventoryService {
       'inventory.updated',
       { inventoryId: id },
     );
-    this.realtime.emitToRoles([Role.MANAGER, Role.OWNER], 'dashboard.updated', {});
+    this.realtime.emitToRoles(
+      [Role.MANAGER, Role.OWNER],
+      'dashboard.updated',
+      {},
+    );
 
     if (actorId) {
       await this.prisma.activityLog.create({

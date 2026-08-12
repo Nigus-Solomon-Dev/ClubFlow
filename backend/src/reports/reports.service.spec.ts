@@ -57,7 +57,7 @@ describe('ReportsService', () => {
     ]);
   });
 
-it('groups weekly sales starting on Monday', async () => {
+  it('groups weekly sales starting on Monday', async () => {
     prisma.order.findMany.mockResolvedValue([
       { completedAt: new Date('2024-08-06T10:00:00Z'), totalPrice: 80 },
       { completedAt: new Date('2024-08-08T10:00:00Z'), totalPrice: 20 },
@@ -96,7 +96,10 @@ it('groups weekly sales starting on Monday', async () => {
     // lowSelling uses the same groupBy mock.
     const low = await service.lowSelling();
     expect(low.length).toBe(1);
-    expect(low[0]).toEqual({ productName: 'A', _sum: { subtotal: 5, quantity: 1 } });
+    expect(low[0]).toEqual({
+      productName: 'A',
+      _sum: { subtotal: 5, quantity: 1 },
+    });
     expect(prisma.orderItem.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({ orderBy: { _sum: { subtotal: 'asc' } } }),
     );

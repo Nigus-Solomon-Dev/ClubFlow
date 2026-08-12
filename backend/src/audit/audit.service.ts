@@ -6,11 +6,7 @@ import { PrismaService } from '../prisma/prisma.service';
 export class AuditService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async trail(options: {
-    limit?: number;
-    role?: Role;
-    action?: string;
-  }) {
+  async trail(options: { limit?: number; role?: Role; action?: string }) {
     const where: Record<string, unknown> = {};
     if (options.action) {
       where.action = options.action;
@@ -31,7 +27,9 @@ export class AuditService {
       include: {
         waiter: { select: { id: true, name: true } },
         table: { select: { id: true, name: true } },
-        items: { select: { productName: true, quantity: true, unitPrice: true } },
+        items: {
+          select: { productName: true, quantity: true, unitPrice: true },
+        },
         cancellationRequests: {
           select: {
             id: true,
@@ -52,7 +50,14 @@ export class AuditService {
   async cancellationHistory() {
     return this.prisma.cancellationRequest.findMany({
       include: {
-        order: { select: { id: true, orderNumber: true, status: true, totalPrice: true } },
+        order: {
+          select: {
+            id: true,
+            orderNumber: true,
+            status: true,
+            totalPrice: true,
+          },
+        },
         requestedBy: { select: { id: true, name: true, role: true } },
         barman: { select: { id: true, name: true } },
         decidedBy: { select: { id: true, name: true } },

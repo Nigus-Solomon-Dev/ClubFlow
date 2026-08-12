@@ -296,8 +296,7 @@ export class ReportsService {
       const qty = items.get(order.waiterId) ?? 0;
       items.set(
         order.waiterId,
-        qty +
-          order.items.reduce((acc, it) => acc + it.quantity, 0),
+        qty + order.items.reduce((acc, it) => acc + it.quantity, 0),
       );
     }
 

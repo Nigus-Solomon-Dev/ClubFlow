@@ -167,7 +167,8 @@ export class SettlementsService {
       ),
       collected: this.toNumber(
         s.entries.reduce(
-          (acc, e) => acc + (e.collected == null ? 0 : this.toNumber(e.collected)),
+          (acc, e) =>
+            acc + (e.collected == null ? 0 : this.toNumber(e.collected)),
           0,
         ),
       ),
@@ -176,8 +177,7 @@ export class SettlementsService {
         employeeId: e.employeeId,
         employeeName: e.employee?.name ?? '—',
         expected: this.toNumber(e.expected),
-        collected:
-          e.collected == null ? null : this.toNumber(e.collected),
+        collected: e.collected == null ? null : this.toNumber(e.collected),
       })),
     }));
   }
@@ -203,10 +203,7 @@ export class SettlementsService {
       collected: e.collected == null ? null : this.toNumber(e.collected),
     }));
     const expected = entries.reduce((acc, e) => acc + e.expected, 0);
-    const collected = entries.reduce(
-      (acc, e) => acc + (e.collected ?? 0),
-      0,
-    );
+    const collected = entries.reduce((acc, e) => acc + (e.collected ?? 0), 0);
     return {
       id: settlement.id,
       date: settlement.date,

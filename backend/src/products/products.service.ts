@@ -58,7 +58,11 @@ export class ProductsService {
       });
       return tx.product.findUnique({
         where: { id: product.id },
-        include: { category: true, inventory: true, sellingUnits: { orderBy: { price: 'asc' } } },
+        include: {
+          category: true,
+          inventory: true,
+          sellingUnits: { orderBy: { price: 'asc' } },
+        },
       });
     });
   }
@@ -76,7 +80,11 @@ export class ProductsService {
     return this.prisma.product.update({
       where: { id },
       data: dto,
-      include: { category: true, inventory: true, sellingUnits: { orderBy: { price: 'asc' } } },
+      include: {
+        category: true,
+        inventory: true,
+        sellingUnits: { orderBy: { price: 'asc' } },
+      },
     });
   }
 

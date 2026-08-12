@@ -24,9 +24,7 @@ export class AuthService {
 
   async register(dto: RegisterDto, actorRole: string): Promise<AuthResponse> {
     if (dto.role === Role.OWNER && actorRole !== Role.OWNER) {
-      throw new ForbiddenException(
-        'Only an OWNER can create an OWNER account',
-      );
+      throw new ForbiddenException('Only an OWNER can create an OWNER account');
     }
 
     const exists = await this.prisma.user.findUnique({
