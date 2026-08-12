@@ -6,18 +6,21 @@ import { Badge, Card, EmptyState, StatCard } from '@/components/ui';
 import { useRealtime } from '@/hooks/useRealtime';
 import { api } from '@/services/api';
 import { REAL_TIME_EVENTS } from '@/services/realtime';
-import type { Dashboard, SalesReport } from '@/types';
+import { formatLeft } from '@/lib/stock';
+import type { Dashboard, SalesReport, StockHandoverAlert } from '@/types';
 
 export default function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [sales, setSales] = useState<SalesReport | null>(null);
+  const [alerts, setAlerts] = useState<StockHandoverAlert[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    Promise.all([api.dashboard(), api.salesReport()])
-      .then(([d, s]) => {
+    Promise.all([api.dashboard(), api.salesReport(), api.stockHandoverAlerts()])
+      .then(([d, s, a]) => {
         setData(d);
         setSales(s);
+        setAlerts(a);
         setError(null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'));
@@ -27,7 +30,10 @@ export default function DashboardPage() {
     load();
   }, [load]);
 
-  useRealtime(REAL_TIME_EVENTS.dashboardUpdated, load);
+  useRealtime(
+    [REAL_TIME_EVENTS.dashboardUpdated, REAL_TIME_EVENTS.handoverChanged],
+    load,
+  );
 
   if (error) {
     return (
@@ -87,6 +93,45 @@ export default function DashboardPage() {
               <Badge tone="green">{data.totals.activeTables}</Badge>
             </li>
           </ul>
+        </Card>
+      </div>
+
+      <div className="mt-6">
+        <Card title="Stock alerts (running low)">
+          {alerts.length === 0 ? (
+            <EmptyState>No barman is running low on any drink right now.</EmptyState>
+          ) : (
+            <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {alerts.map((a) => (
+                <li
+                  key={`${a.handoverId}-${a.product.id}`}
+                  className={`rounded-lg border px-4 py-3 text-sm ${
+                    a.level === 'empty'
+                      ? 'border-red-200 bg-red-50'
+                      : 'border-amber-200 bg-amber-50'
+                  }`}
+                >
+                  <p
+                    className={`truncate font-semibold ${
+                      a.level === 'empty' ? 'text-red-800' : 'text-amber-800'
+                    }`}
+                  >
+                    {a.product.name}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-600">
+                    {a.barman.name} ·{' '}
+                    <span
+                      className={
+                        a.level === 'empty' ? 'font-medium text-red-700' : 'font-medium text-amber-700'
+                      }
+                    >
+                      {a.level === 'empty' ? '0 left' : `${formatLeft(a.product, a.left)} left`}
+                    </span>
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       </div>
     </AppShell>
