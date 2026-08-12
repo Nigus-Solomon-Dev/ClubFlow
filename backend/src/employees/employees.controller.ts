@@ -13,7 +13,7 @@ export class EmployeesController {
   constructor(private readonly employeesService: EmployeesService) {}
 
   @Get()
-  @Roles(Role.MANAGER)
+  @Roles(Role.MANAGER, Role.OWNER)
   findAll() {
     return this.employeesService.findAll();
   }

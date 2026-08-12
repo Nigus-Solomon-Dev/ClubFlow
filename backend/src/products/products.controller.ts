@@ -23,13 +23,13 @@ export class ProductsController {
   constructor(private readonly productsService: ProductsService) {}
 
   @Get()
-  @Roles(Role.MANAGER, Role.WAITER, Role.BARMAN, Role.CASHIER)
+  @Roles(Role.MANAGER, Role.OWNER, Role.WAITER, Role.BARMAN, Role.CASHIER)
   findAll() {
     return this.productsService.findAll();
   }
 
   @Get(':id')
-  @Roles(Role.MANAGER, Role.WAITER, Role.BARMAN, Role.CASHIER)
+  @Roles(Role.MANAGER, Role.OWNER, Role.WAITER, Role.BARMAN, Role.CASHIER)
   findOne(@Param('id') id: string) {
     return this.productsService.findOne(id);
   }
