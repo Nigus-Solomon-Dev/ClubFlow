@@ -22,12 +22,13 @@ import type {
   InventoryUsage,
   LoginDto,
   LowProduct,
+  ManagerSettleResult,
+  ManagerStockHandover,
   MonthlySales,
   Order,
   OrderEditRequest,
   OrderStatus,
   Product,
-  ReconciliationReport,
   RegisterDto,
   RestaurantTable,
   SalesReport,
@@ -37,6 +38,7 @@ import type {
   Settlement,
   SettlementHistory,
   StockHandover,
+  StockHandoverAlert,
   WeeklySales,
   CancellationReport,
 } from '../types';
@@ -282,23 +284,41 @@ export const api = {
   stockHandovers: () => request<StockHandover[]>('/stock-handovers'),
   stockHandoverMine: () => request<StockHandover[]>('/stock-handovers/mine'),
   stockHandoverActive: () => request<StockHandover[]>('/stock-handovers/active'),
-  createStockHandover: (body: {
+  stockHandoverAlerts: () => request<StockHandoverAlert[]>('/stock-handovers/alerts'),
+  openStockHandover: () =>
+    request<StockHandover>('/stock-handovers/open', { method: 'POST' }),
+  giveStock: (body: {
     barmanId: string;
-    date?: string;
     items: { productId: string; givenQty: number }[];
-  }) => request<StockHandover>('/stock-handovers', { method: 'POST', body }),
-  countStockHandover: (
+  }) => request<StockHandover>('/stock-handovers/give', { method: 'POST', body }),
+  closeStockHandover: (
     id: string,
     items: { productId: string; countedQty: number }[],
   ) =>
-    request<StockHandover>(`/stock-handovers/${id}/count`, {
+    request<StockHandover>(`/stock-handovers/${id}/close`, {
       method: 'POST',
       body: { items },
     }),
-  stockReconciliation: (date?: string) =>
-    request<ReconciliationReport>(
-      `/stock-handovers/reconciliation${date ? `?date=${encodeURIComponent(date)}` : ''}`,
-    ),
+  acceptStockHandover: (id: string) =>
+    request<StockHandover>(`/stock-handovers/${id}/accept`, {
+      method: 'POST',
+    }),
+
+  // Manager stock handovers (owner -> manager)
+  managerStockHandovers: () => request<ManagerStockHandover[]>('/manager-stock-handovers'),
+  managerStockGive: (body: {
+    managerId: string;
+    items: { productId: string; givenQty: number }[];
+  }) => request<ManagerStockHandover>('/manager-stock-handovers/give', { method: 'POST', body }),
+  managerStockSettle: (items: { productId: string; countedQty: number }[]) =>
+    request<ManagerSettleResult>('/manager-stock-handovers/settle', {
+      method: 'POST',
+      body: { items },
+    }),
+  acceptManagerStockHandover: (id: string) =>
+    request<ManagerStockHandover>(`/manager-stock-handovers/${id}/accept`, {
+      method: 'POST',
+    }),
 
   // Settlements
   settlementToday: () => request<Settlement>('/settlements/today'),

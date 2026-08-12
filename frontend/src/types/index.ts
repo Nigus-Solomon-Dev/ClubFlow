@@ -155,6 +155,7 @@ export interface Shift {
   expectedMoney?: number;
   paidAt?: string | null;
   paidById?: string | null;
+  isSettle?: boolean;
   user?: { id: string; name: string; role?: Role };
   paidBy?: { id: string; name: string } | null;
 }
@@ -165,7 +166,10 @@ export interface StockHandoverProduct {
   stockUnit: string;
   piecesPerCase: number | null;
   category?: { name: string } | null;
+  sellingUnits?: SellingUnit[];
 }
+
+export type StockHandoverLevel = 'ok' | 'warn' | 'empty';
 
 export interface StockHandoverItem {
   id: string;
@@ -174,39 +178,80 @@ export interface StockHandoverItem {
   givenQty: number;
   countedQty: number | null;
   consumedQty: number | null;
+  variance: number | null;
+  soldQty: number;
+  left: number;
+  threshold: number;
+  level: StockHandoverLevel;
+}
+
+export interface StockHandoverEvent {
+  id: string;
+  handoverId: string;
+  action: 'OPEN' | 'GIVE' | 'CLOSE' | 'ACCEPT';
+  items?: { productId: string; givenQty: number }[] | null;
+  createdAt: string;
+  actor?: { id: string; name: string };
 }
 
 export interface StockHandover {
   id: string;
-  date: string;
-  status: 'ACTIVE' | 'COUNTED';
+  status: 'OPEN' | 'CLOSED';
+  openedAt: string;
+  closedAt?: string | null;
+  acceptedAt?: string | null;
+  acceptedById?: string | null;
   createdAt: string;
-  countedAt?: string | null;
   manager?: { id: string; name: string } | null;
   barman?: { id: string; name: string } | null;
-  countedBy?: { id: string; name: string } | null;
+  closedBy?: { id: string; name: string } | null;
+  acceptedBy?: { id: string; name: string } | null;
   items: StockHandoverItem[];
 }
 
-export interface ReconciliationRow {
+export interface StockHandoverAlert {
+  handoverId: string;
+  barman: { id: string; name: string };
   product: StockHandoverProduct;
   given: number;
   sold: number;
-  expectedRemaining: number;
-  counted: number | null;
-  variance: number | null;
+  left: number;
+  threshold: number;
+  level: 'warn' | 'empty';
 }
 
-export interface ReconciliationReport {
-  date: string;
-  handovers: number;
-  rows: ReconciliationRow[];
-  summary: {
-    given: number;
-    sold: number;
-    counted: number | null;
-    allCounted: boolean;
-  };
+export interface ManagerStockHandoverItem {
+  id: string;
+  productId: string;
+  product: StockHandoverProduct;
+  givenQty: number;
+  givenAwayQty?: number;
+  countedQty: number | null;
+  consumedQty: number | null;
+  variance: number | null;
+  soldQty: number;
+  left: number;
+  level: 'ok' | 'warn' | 'empty';
+}
+
+export interface ManagerStockHandover {
+  id: string;
+  status: 'OPEN' | 'CLOSED';
+  openedAt: string;
+  closedAt?: string | null;
+  acceptedAt?: string | null;
+  acceptedById?: string | null;
+  createdAt: string;
+  manager?: { id: string; name: string } | null;
+  givenBy?: { id: string; name: string } | null;
+  closedBy?: { id: string; name: string } | null;
+  acceptedBy?: { id: string; name: string } | null;
+  items: ManagerStockHandoverItem[];
+}
+
+export interface ManagerSettleResult {
+  shift: { id: string; expectedMoney: number };
+  stock: ManagerStockHandover | null;
 }
 
 export interface Dashboard {

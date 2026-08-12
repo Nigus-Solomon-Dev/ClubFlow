@@ -22,7 +22,7 @@ const NAV: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', roles: ['OWNER', 'MANAGER'] },
   { href: '/pos', label: 'POS', roles: ['WAITER', 'BARMAN', 'CASHIER'] },
   { href: '/history', label: 'History', roles: ['WAITER', 'BARMAN', 'CASHIER'] },
-  { href: '/handover', label: 'Stock handover', roles: ['MANAGER', 'OWNER', 'CASHIER'] },
+  { href: '/handover', label: 'Stock handover', roles: ['MANAGER', 'OWNER'] },
   { href: '/settlements', label: 'End of day', roles: ['CASHIER', 'MANAGER', 'OWNER'] },
   { href: '/menu', label: 'Products', roles: ['MANAGER'] },
   { href: '/tables', label: 'Tables', roles: ['MANAGER'] },

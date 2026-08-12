@@ -1,474 +1,1195 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Badge, Button, Card, EmptyState, Input } from '@/components/ui';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+} from '@/components/ui';
 import { useAuth } from '@/context/AuthContext';
+import { useRealtime } from '@/hooks/useRealtime';
 import { api } from '@/services/api';
+import { REAL_TIME_EVENTS } from '@/services/realtime';
+import { formatLeft, giveUnit } from '@/lib/stock';
+import StockItemsList from '@/components/stock/StockItemsList';
 import type {
   Employee,
+  ManagerStockHandover,
   Product,
-  ReconciliationReport,
+  Shift,
   StockHandover,
+  StockHandoverAlert,
 } from '@/types';
 
-function todayKey(): string {
-  const d = new Date();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${d.getFullYear()}-${m}-${day}`;
+interface GiveLine {
+  productId: string;
+  name: string;
+  unit: string;
+  qty: number;
+  stockQty: number;
 }
 
-function fmt(n: number | null | undefined): string {
-  if (n == null) return '—';
-  return Number(n).toLocaleString(undefined, { maximumFractionDigits: 4 });
+function fmtTime(d: string): string {
+  return new Date(d).toLocaleString();
 }
 
-function productLabel(p: { name: string; stockUnit: string }): string {
-  return `${p.name} (${p.stockUnit.toLowerCase()})`;
-}
-
-function HandoverCard({
-  handover,
-  onCount,
+function GiveStockCard({
+  products,
+  barmans,
+  openHandovers,
+  onDutyIds,
+  onChanged,
 }: {
-  handover: StockHandover;
-  onCount?: (handover: StockHandover, counts: Record<string, string>) => void;
+  products: Product[];
+  barmans: Employee[];
+  openHandovers: StockHandover[];
+  onDutyIds: Set<string>;
+  onChanged: () => void;
 }) {
-  const [counts, setCounts] = useState<Record<string, string>>(() => {
-    const initial: Record<string, string> = {};
-    for (const it of handover.items) initial[it.productId] = String(it.givenQty);
-    return initial;
-  });
-  const counted = handover.status === 'COUNTED';
+  const [barmanId, setBarmanId] = useState('');
+  const [q, setQ] = useState('');
+  const [pending, setPending] = useState<{ product: Product; qty: number } | null>(null);
+  const [cart, setCart] = useState<GiveLine[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const results = useMemo(() => {
+    if (q.trim() === '') return [];
+    const needle = q.trim().toLowerCase();
+    return products
+      .filter((p) => p.isAvailable !== false)
+      .filter((p) => p.name.toLowerCase().includes(needle))
+      .slice(0, 20);
+  }, [products, q]);
+
+  const resultsEmpty = q.trim() !== '' && results.length === 0;
+
+  function pickProduct(p: Product) {
+    setPending({ product: p, qty: 1 });
+  }
+
+  function addPending() {
+    if (!pending || pending.qty <= 0) return;
+    const g = giveUnit(pending.product);
+    const stockQty = pending.qty * g.factor;
+    setCart((prev) => {
+      const existing = prev.find((l) => l.productId === pending.product.id);
+      if (existing) {
+        return prev.map((l) =>
+          l.productId === pending.product.id
+            ? {
+                ...l,
+                qty: l.qty + pending.qty,
+                stockQty: l.stockQty + stockQty,
+              }
+            : l,
+        );
+      }
+      return [
+        ...prev,
+        {
+          productId: pending.product.id,
+          name: pending.product.name,
+          unit: g.name,
+          qty: pending.qty,
+          stockQty,
+        },
+      ];
+    });
+    setPending(null);
+    setQ('');
+  }
+
+  function selectBarman(id: string) {
+    setBarmanId(id);
+    setCart([]);
+    setPending(null);
+  }
+
+  async function handOver() {
+    setError(null);
+    setNotice(null);
+    if (!barmanId) {
+      setError('Select the barman who is on duty.');
+      return;
+    }
+    if (cart.length === 0) {
+      setError('Add at least one item to hand over.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const saved = await api.giveStock({
+        barmanId,
+        items: cart.map((c) => ({ productId: c.productId, givenQty: c.stockQty })),
+      });
+      setNotice(
+        `Stock added to ${saved.barman?.name ?? 'the barman'}. It is now on his balance.`,
+      );
+      setCart([]);
+      setPending(null);
+      setQ('');
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to hand over stock');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const selectedOpen = openHandovers.find((h) => h.barman?.id === barmanId);
 
   return (
-    <div className="rounded-lg border border-zinc-200 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="font-semibold text-zinc-900">
-            {handover.barman?.name ?? 'Barman'} · {handover.date}
-          </p>
-          <p className="text-xs text-zinc-500">
-            Given by {handover.manager?.name ?? 'Manager'}
-            {counted
-              ? ` · counted by ${handover.countedBy?.name ?? 'Cashier'}`
-              : ' · awaiting count'}
-          </p>
-        </div>
-        <Badge tone={counted ? 'green' : 'amber'}>
-          {counted ? 'COUNTED' : 'ACTIVE'}
-        </Badge>
-      </div>
+    <Card title="Give stock to a barman">
+      <label className="text-sm font-medium text-zinc-700">Barman (on duty)</label>
+      <select
+        value={barmanId}
+        onChange={(e) => selectBarman(e.target.value)}
+        className="mb-3 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm"
+      >
+        <option value="">Select a barman…</option>
+        {barmans.map((b) => {
+          const onDuty = onDutyIds.has(b.id);
+          return (
+            <option key={b.id} value={b.id}>
+              {b.name} {onDuty ? '· on duty' : '· not clocked in'}
+            </option>
+          );
+        })}
+      </select>
 
-      <div className="mt-3 divide-y divide-zinc-100 text-sm">
-        {handover.items.map((it) => (
-          <div key={it.id} className="flex items-center justify-between gap-3 py-2">
-            <div className="min-w-0">
-              <p className="truncate font-medium text-zinc-900">
-                {productLabel(it.product)}
-              </p>
-              {counted ? (
-                <p className="text-xs text-zinc-500">
-                  Given {fmt(it.givenQty)} · remaining {fmt(it.countedQty)} ·
-                  consumed {fmt(it.consumedQty)}
-                </p>
-              ) : null}
+      {!barmanId ? (
+        <EmptyState>
+          Select a barman who has clocked in. Stock can only be given to an open
+          stock balance.
+        </EmptyState>
+      ) : (
+        <>
+          {selectedOpen ? (
+            <p className="mb-3 text-xs text-zinc-500">
+              {selectedOpen.items.length} product
+              {selectedOpen.items.length === 1 ? '' : 's'} on his balance since{' '}
+              {fmtTime(selectedOpen.openedAt)}
+            </p>
+          ) : (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              This barman has not clocked in yet. Ask them to open their stock
+              from their History screen.
             </div>
-            {onCount && !counted ? (
-              <Input
-                type="number"
-                step="any"
-                min="0"
-                className="w-28"
-                value={counts[it.productId] ?? ''}
-                onChange={(e) =>
-                  setCounts((prev) => ({
-                    ...prev,
-                    [it.productId]: e.target.value,
-                  }))
-                }
-              />
-            ) : (
-              <span className="whitespace-nowrap text-zinc-700">
-                {fmt(it.givenQty)}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
+          )}
 
-      {onCount && !counted ? (
-        <Button
-          className="mt-3 w-full"
-          onClick={() => onCount(handover, counts)}
-        >
-          Accept count
-        </Button>
-      ) : null}
-    </div>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search a drink to give…"
+            autoFocus
+            className="mb-3 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-zinc-500"
+          />
+
+          {results.length > 0 ? (
+            <div className="mb-3 max-h-48 space-y-1 overflow-auto">
+              {results.map((p) => {
+                const g = giveUnit(p);
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => pickProduct(p)}
+                    className="flex w-full items-center justify-between rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm hover:border-zinc-400 hover:bg-zinc-50"
+                  >
+                    <span className="truncate font-medium text-zinc-900">
+                      {p.name}
+                    </span>
+                    <span className="shrink-0 text-xs text-zinc-400">
+                      in whole {g.name.toLowerCase()}s
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          {resultsEmpty ? (
+            <div className="mb-3">
+              <EmptyState>No drinks match your search.</EmptyState>
+            </div>
+          ) : null}
+
+          {pending ? (
+            <div className="mb-3 rounded-lg border border-zinc-200 p-3">
+              <p className="text-sm font-medium text-zinc-900">
+                {pending.product.name}
+              </p>
+              <div className="mt-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    className="h-8 w-8 px-0"
+                    onClick={() =>
+                      setPending((p) =>
+                        p ? { ...p, qty: Math.max(1, p.qty - 1) } : p,
+                      )
+                    }
+                  >
+                    −
+                  </Button>
+                  <span className="w-8 text-center text-lg font-semibold">
+                    {pending.qty}
+                  </span>
+                  <Button
+                    variant="secondary"
+                    className="h-8 w-8 px-0"
+                    onClick={() =>
+                      setPending((p) => (p ? { ...p, qty: p.qty + 1 } : p))
+                    }
+                  >
+                    +
+                  </Button>
+                  <span className="text-sm text-zinc-500">
+                    whole {giveUnit(pending.product).name.toLowerCase()}
+                  </span>
+                </div>
+                <Button onClick={addPending}>Add</Button>
+              </div>
+            </div>
+          ) : null}
+
+          {cart.length > 0 ? (
+            <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 text-sm">
+              {cart.map((c) => (
+                <li
+                  key={c.productId}
+                  className="flex items-center justify-between gap-3 px-3 py-2"
+                >
+                  <span className="min-w-0 truncate font-medium text-zinc-900">
+                    {c.name}
+                  </span>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="text-zinc-600">
+                      {c.qty} {c.unit.toLowerCase()}
+                      {c.qty > 1 ? 's' : ''}
+                    </span>
+                    <button
+                      onClick={() =>
+                        setCart((prev) =>
+                          prev.filter((l) => l.productId !== c.productId),
+                        )
+                      }
+                      className="text-xs text-red-500 hover:text-red-700"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          {error ? (
+            <div className="mt-3">
+              <Alert>{error}</Alert>
+            </div>
+          ) : null}
+          {notice ? (
+            <div className="mt-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+              {notice}
+            </div>
+          ) : null}
+
+          <Button
+            className="mt-4 w-full"
+            onClick={handOver}
+            disabled={busy || !barmanId || cart.length === 0 || !selectedOpen}
+          >
+            {busy ? 'Handing over…' : 'Hand over stock'}
+          </Button>
+        </>
+      )}
+    </Card>
   );
 }
 
-function ReconciliationCard() {
-  const [date, setDate] = useState(todayKey());
-  const [report, setReport] = useState<ReconciliationReport | null>(null);
+function GiveStockToManagerCard({
+  products,
+  managers,
+  openHandover,
+  onChanged,
+}: {
+  products: Product[];
+  managers: Employee[];
+  openHandover: ManagerStockHandover | null;
+  onChanged: () => void;
+}) {
+  const [managerId, setManagerId] = useState('');
+  const [q, setQ] = useState('');
+  const [pending, setPending] = useState<{ product: Product; qty: number } | null>(null);
+  const [cart, setCart] = useState<GiveLine[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(true);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    let active = true;
-    api
-      .stockReconciliation(date)
-      .then((r) => {
-        if (active) {
-          setReport(r);
-          setError(null);
-        }
-      })
-      .catch((e) => {
-        if (active) {
-          setError(e instanceof Error ? e.message : 'Failed to load');
-        }
-      })
-      .finally(() => {
-        if (active) setBusy(false);
+  const results = useMemo(() => {
+    if (q.trim() === '') return [];
+    const needle = q.trim().toLowerCase();
+    return products
+      .filter((p) => p.isAvailable !== false)
+      .filter((p) => p.name.toLowerCase().includes(needle))
+      .slice(0, 20);
+  }, [products, q]);
+
+  const resultsEmpty = q.trim() !== '' && results.length === 0;
+
+  function pickProduct(p: Product) {
+    setPending({ product: p, qty: 1 });
+  }
+
+  function addPending() {
+    if (!pending || pending.qty <= 0) return;
+    const g = giveUnit(pending.product);
+    const stockQty = pending.qty * g.factor;
+    setCart((prev) => {
+      const existing = prev.find((l) => l.productId === pending.product.id);
+      if (existing) {
+        return prev.map((l) =>
+          l.productId === pending.product.id
+            ? { ...l, qty: l.qty + pending.qty, stockQty: l.stockQty + stockQty }
+            : l,
+        );
+      }
+      return [
+        ...prev,
+        {
+          productId: pending.product.id,
+          name: pending.product.name,
+          unit: g.name,
+          qty: pending.qty,
+          stockQty,
+        },
+      ];
+    });
+    setPending(null);
+    setQ('');
+  }
+
+  async function handOver() {
+    setError(null);
+    setNotice(null);
+    if (!managerId) {
+      setError('Select the manager.');
+      return;
+    }
+    if (cart.length === 0) {
+      setError('Add at least one item to hand over.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const saved = await api.managerStockGive({
+        managerId,
+        items: cart.map((c) => ({ productId: c.productId, givenQty: c.stockQty })),
       });
-    return () => {
-      active = false;
-    };
-  }, [date]);
-
-  const varianceCount = report?.rows.filter((r) => r.variance != null && r.variance !== 0).length ?? 0;
+      setNotice(
+        `Stock added to ${saved.manager?.name ?? 'the manager'}. It is now on his balance.`,
+      );
+      setCart([]);
+      setPending(null);
+      setQ('');
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to hand over stock');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <Card title={`Reconciliation (${date})`}>
-      <div className="mb-4 flex items-end gap-3">
-        <div className="w-48">
-          <label className="text-sm font-medium text-zinc-700">Date</label>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+    <Card title="Give stock to the manager">
+      <label className="text-sm font-medium text-zinc-700">Manager</label>
+      <select
+        value={managerId}
+        onChange={(e) => setManagerId(e.target.value)}
+        className="mb-3 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm"
+      >
+        <option value="">Select a manager…</option>
+        {managers.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
+            {openHandover?.manager?.id === m.id ? ' · balance open' : ''}
+          </option>
+        ))}
+      </select>
+
+      {!managerId ? (
+        <EmptyState>
+          Select the manager. Hand-over keeps adding to his open balance — the
+          owner and the manager settle it together at the end.
+        </EmptyState>
+      ) : (
+        <>
+          {openHandover && openHandover.manager?.id === managerId ? (
+            <p className="mb-3 text-xs text-zinc-500">
+              {openHandover.items.length} product
+              {openHandover.items.length === 1 ? '' : 's'} on his balance since{' '}
+              {fmtTime(openHandover.openedAt)}
+            </p>
+          ) : (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              This manager has no open balance yet — handing over will open one.
+            </div>
+          )}
+
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search a drink to give…"
+            className="mb-3 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-zinc-500"
+          />
+
+          {results.length > 0 ? (
+            <div className="mb-3 max-h-48 space-y-1 overflow-auto">
+              {results.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => pickProduct(p)}
+                  className="flex w-full items-center justify-between rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm hover:border-zinc-400 hover:bg-zinc-50"
+                >
+                  <span className="truncate font-medium text-zinc-900">
+                    {p.name}
+                  </span>
+                  <span className="shrink-0 text-xs text-zinc-400">
+                    in whole {giveUnit(p).name.toLowerCase()}s
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {resultsEmpty ? (
+            <div className="mb-3">
+              <EmptyState>No drinks match your search.</EmptyState>
+            </div>
+          ) : null}
+
+          {pending ? (
+            <div className="mb-3 rounded-lg border border-zinc-200 p-3">
+              <p className="text-sm font-medium text-zinc-900">
+                {pending.product.name}
+              </p>
+              <div className="mt-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    className="h-8 w-8 px-0"
+                    onClick={() =>
+                      setPending((p) =>
+                        p ? { ...p, qty: Math.max(1, p.qty - 1) } : p,
+                      )
+                    }
+                  >
+                    −
+                  </Button>
+                  <span className="w-8 text-center text-lg font-semibold">
+                    {pending.qty}
+                  </span>
+                  <Button
+                    variant="secondary"
+                    className="h-8 w-8 px-0"
+                    onClick={() =>
+                      setPending((p) => (p ? { ...p, qty: p.qty + 1 } : p))
+                    }
+                  >
+                    +
+                  </Button>
+                  <span className="text-sm text-zinc-500">
+                    whole {giveUnit(pending.product).name.toLowerCase()}
+                  </span>
+                </div>
+                <Button onClick={addPending}>Add</Button>
+              </div>
+            </div>
+          ) : null}
+
+          {cart.length > 0 ? (
+            <ul className="divide-y divide-zinc-100 rounded-lg border border-zinc-200 text-sm">
+              {cart.map((c) => (
+                <li
+                  key={c.productId}
+                  className="flex items-center justify-between gap-3 px-3 py-2"
+                >
+                  <span className="min-w-0 truncate font-medium text-zinc-900">
+                    {c.name}
+                  </span>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="text-zinc-600">
+                      {c.qty} {c.unit.toLowerCase()}
+                      {c.qty > 1 ? 's' : ''}
+                    </span>
+                    <button
+                      onClick={() =>
+                        setCart((prev) =>
+                          prev.filter((l) => l.productId !== c.productId),
+                        )
+                      }
+                      className="text-xs text-red-500 hover:text-red-700"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          {error ? (
+            <div className="mt-3">
+              <Alert>{error}</Alert>
+            </div>
+          ) : null}
+          {notice ? (
+            <div className="mt-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+              {notice}
+            </div>
+          ) : null}
+
+          <Button
+            className="mt-4 w-full"
+            onClick={handOver}
+            disabled={busy || !managerId || cart.length === 0}
+          >
+            {busy ? 'Handing over…' : 'Hand over stock to the manager'}
+          </Button>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function AlertsCard({ alerts }: { alerts: StockHandoverAlert[] }) {
+  const empties = alerts.filter((a) => a.level === 'empty');
+  const warns = alerts.filter((a) => a.level === 'warn');
+
+  return (
+    <Card title="Running low — alerts">
+      {alerts.length === 0 ? (
+        <EmptyState>No drink is running low right now.</EmptyState>
+      ) : (
+        <>
+          {empties.length > 0 ? (
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-red-500">
+              Out of stock
+            </p>
+          ) : null}
+          <ul className="space-y-1">
+            {empties.map((a) => (
+              <li
+                key={`${a.handoverId}-${a.product.id}`}
+                className="flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-red-800">
+                    {a.product.name}
+                  </p>
+                  <p className="text-xs text-red-600">{a.barman.name}</p>
+                </div>
+                <Badge tone="red">0 left</Badge>
+              </li>
+            ))}
+          </ul>
+
+          {warns.length > 0 ? (
+            <p className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-amber-500">
+              Below one full unit
+            </p>
+          ) : null}
+          <ul className="space-y-1">
+            {warns.map((a) => (
+              <li
+                key={`${a.handoverId}-${a.product.id}`}
+                className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-amber-800">
+                    {a.product.name}
+                  </p>
+                  <p className="text-xs text-amber-600">{a.barman.name}</p>
+                </div>
+                <Badge tone="amber">{formatLeft(a.product, a.left)} left</Badge>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function ClosedHandoversCard({
+  handovers,
+  onChanged,
+}: {
+  handovers: StockHandover[];
+  onChanged: () => void;
+}) {
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function accept(h: StockHandover) {
+    setError(null);
+    setAcceptingId(h.id);
+    try {
+      await api.acceptStockHandover(h.id);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to accept stock');
+    } finally {
+      setAcceptingId(null);
+    }
+  }
+
+  const pending = handovers.filter((h) => !h.acceptedAt);
+
+  if (pending.length === 0) {
+    return (
+      <Card title="Closed stock (barman)">
+        <EmptyState>No closed barman stock waiting to be accepted.</EmptyState>
+      </Card>
+    );
+  }
+  return (
+    <Card title="Closed stock (barman)">
+      {error ? (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
         </div>
-        {busy ? <p className="text-sm text-zinc-500">Loading…</p> : null}
+      ) : null}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {pending.map((h) => (
+          <div key={h.id} className="rounded-lg border border-zinc-200 p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="font-semibold text-zinc-900">
+                {h.barman?.name ?? 'Barman'}
+              </p>
+              <p className="text-xs text-zinc-500">
+                Closed {fmtTime(h.closedAt ?? h.openedAt)}
+              </p>
+            </div>
+            <StockItemsList handover={h} />
+            <div className="mt-3">
+              <Button
+                className="w-full"
+                onClick={() => accept(h)}
+                disabled={acceptingId === h.id}
+              >
+                {acceptingId === h.id ? 'Accepting…' : 'Accept'}
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function ClosedManagerHandoverCard({
+  handovers,
+  onChanged,
+}: {
+  handovers: ManagerStockHandover[];
+  onChanged: () => void;
+}) {
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function accept(h: ManagerStockHandover) {
+    setError(null);
+    setAcceptingId(h.id);
+    try {
+      await api.acceptManagerStockHandover(h.id);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to accept stock');
+    } finally {
+      setAcceptingId(null);
+    }
+  }
+
+  const pending = handovers.filter((h) => h.status === 'CLOSED' && !h.acceptedAt);
+
+  if (pending.length === 0) {
+    return (
+      <Card title="Closed stock (manager)">
+        <EmptyState>No closed manager stock waiting to be accepted.</EmptyState>
+      </Card>
+    );
+  }
+  return (
+    <Card title="Closed stock — accept from the manager">
+      {error ? (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
+        </div>
+      ) : null}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {pending.map((h) => (
+          <div key={h.id} className="rounded-lg border border-zinc-200 p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="font-semibold text-zinc-900">
+                {h.manager?.name ?? 'Manager'}
+              </p>
+              <p className="text-xs text-zinc-500">
+                Counted {fmtTime(h.closedAt ?? h.openedAt)}
+              </p>
+            </div>
+            <StockItemsList handover={h} />
+            <div className="mt-3">
+              <Button
+                className="w-full"
+                onClick={() => accept(h)}
+                disabled={acceptingId === h.id}
+              >
+                {acceptingId === h.id ? 'Accepting…' : 'Accept'}
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function MyManagerStockCard({
+  handovers,
+  shifts,
+  openBarmanCount,
+  unacceptedCount,
+  onChanged,
+}: {
+  handovers: ManagerStockHandover[];
+  shifts: Shift[];
+  openBarmanCount: number;
+  unacceptedCount: number;
+  onChanged: () => void;
+}) {
+  const { user } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const open = handovers.find((h) => h.status === 'OPEN');
+  const recent = useMemo(() => {
+    if (open) return open;
+    const closed = handovers
+      .filter((h) => h.status === 'CLOSED')
+      .sort(
+        (a, b) =>
+          new Date(b.closedAt ?? b.openedAt).getTime() -
+          new Date(a.closedAt ?? a.openedAt).getTime(),
+      );
+    return closed[0] ?? null;
+  }, [handovers, open]);
+
+  const pendingSettle = useMemo(
+    () =>
+      shifts.find(
+        (s) => s.user?.id === user?.id && s.isSettle && !s.paidAt,
+      ) ?? null,
+    [shifts, user],
+  );
+
+  const lastSettle = useMemo(() => {
+    const settles = shifts
+      .filter((s) => s.user?.id === user?.id && s.isSettle)
+      .sort(
+        (a, b) =>
+          new Date(b.endedAt ?? b.startedAt).getTime() -
+          new Date(a.endedAt ?? a.startedAt).getTime(),
+      );
+    return settles[0] ?? null;
+  }, [shifts, user]);
+
+  const moneyToGive = useMemo(() => {
+    if (pendingSettle) return Number(pendingSettle.expectedMoney ?? 0);
+    const windowStart = lastSettle
+      ? new Date(lastSettle.endedAt ?? lastSettle.startedAt)
+      : new Date(0);
+    return shifts
+      .filter(
+        (s) =>
+          s.paidById === user?.id &&
+          s.user?.role === 'CASHIER' &&
+          s.paidAt &&
+          new Date(s.paidAt) > windowStart,
+      )
+      .reduce((sum, s) => sum + Number(s.expectedMoney ?? 0), 0);
+  }, [shifts, pendingSettle, lastSettle, user]);
+
+  async function doSettle() {
+    setError(null);
+    setNotice(null);
+    const items = (open?.items ?? []).map((it) => ({
+      productId: it.productId,
+      countedQty: it.left,
+    }));
+    setBusy(true);
+    try {
+      const res = await api.managerStockSettle(items);
+      setNotice(
+        `Settled with the owner. Money to give: ${Number(
+          res.shift.expectedMoney,
+        ).toFixed(2)} — the owner accepts it on the End of day screen.${
+          res.stock ? ' Stock closed for the owner to accept.' : ''
+        }`,
+      );
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to settle');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const blockedByBarman =
+    openBarmanCount > 0 || unacceptedCount > 0;
+  const blockedMessage =
+    openBarmanCount > 0
+      ? `You cannot settle with the owner until every barman&apos;s stock batch is counted and closed (${openBarmanCount} still open).`
+      : unacceptedCount > 0
+        ? `Accept the counted barman stock first before settling — their returned stock lands back in your balance (${unacceptedCount} waiting).`
+        : null;
+
+  return (
+    <Card title="My stock & settle">
+      {error ? (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+          {notice}
+        </div>
+      ) : null}
+
+      <div className="mb-4 grid grid-cols-2 gap-3">
+        <div className="rounded-lg border border-zinc-200 p-3">
+          <p className="text-xs font-medium text-zinc-500">Money to give (to the owner)</p>
+          <p className="mt-1 text-xl font-semibold text-zinc-900">
+            {moneyToGive.toFixed(2)}
+          </p>
+          {pendingSettle ? (
+            <p className="mt-1 text-xs text-amber-600">
+              Waiting for the owner to accept your last settle.
+            </p>
+          ) : null}
+        </div>
+        <div className="rounded-lg border border-zinc-200 p-3">
+          <p className="text-xs font-medium text-zinc-500">Owner stock balance</p>
+          <p className="mt-1 text-xl font-semibold text-zinc-900">
+            {recent
+              ? recent.status === 'OPEN'
+                ? 'Open'
+                : 'Closed'
+              : 'None'}
+          </p>
+          {recent && recent.status === 'OPEN' ? (
+            <p className="mt-1 text-xs text-zinc-500">
+              given {recent.items.length} item
+              {recent.items.length === 1 ? '' : 's'} · since{' '}
+              {new Date(recent.openedAt).toLocaleDateString()}
+            </p>
+          ) : recent && recent.acceptedAt ? (
+            <p className="mt-1 text-xs text-green-600">
+              Accepted by the owner {fmtTime(recent.acceptedAt)}
+            </p>
+          ) : recent && recent.status === 'CLOSED' ? (
+            <p className="mt-1 text-xs text-amber-600">
+              Waiting for the owner to accept the count.
+            </p>
+          ) : null}
+        </div>
       </div>
 
+      {open ? (
+        <>
+          <StockItemsList handover={open} />
+        </>
+      ) : (
+        <EmptyState>
+          The owner has not given you stock yet. Money settling still works
+          without an owner stock balance.
+        </EmptyState>
+      )}
+
+      {blockedByBarman ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {blockedMessage}
+        </div>
+      ) : null}
+
+      <Button
+        className="mt-4 w-full"
+        onClick={doSettle}
+        disabled={busy || blockedByBarman || Boolean(pendingSettle)}
+      >
+        {busy
+          ? 'Settling…'
+          : pendingSettle
+          ? 'Waiting for the owner'
+          : 'Settle with the owner (clock out)'}
+      </Button>
+    </Card>
+  );
+}
+
+function ManagerView() {
+  const [handovers, setHandovers] = useState<StockHandover[]>([]);
+  const [managerHandovers, setManagerHandovers] = useState<ManagerStockHandover[]>([]);
+  const [alerts, setAlerts] = useState<StockHandoverAlert[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [shifts, setShifts] = useState<Shift[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const reload = useCallback(() => {
+    Promise.all([
+      api.stockHandovers(),
+      api.managerStockHandovers(),
+      api.stockHandoverAlerts(),
+      api.employees(),
+      api.products(),
+      api.shifts(),
+    ])
+      .then(([h, mh, a, e, p, s]) => {
+        setHandovers(h);
+        setManagerHandovers(mh);
+        setAlerts(a);
+        setEmployees(e);
+        setProducts(p);
+        setShifts(s);
+        setError(null);
+      })
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'Failed to load'),
+      );
+  }, []);
+
+  // Fast path for live updates: stock + shift state is all that can change.
+  const reloadStock = useCallback(() => {
+    Promise.all([
+      api.stockHandovers(),
+      api.managerStockHandovers(),
+      api.stockHandoverAlerts(),
+      api.shifts(),
+    ])
+      .then(([h, mh, a, s]) => {
+        setHandovers(h);
+        setManagerHandovers(mh);
+        setAlerts(a);
+        setShifts(s);
+        setError(null);
+      })
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'Failed to load'),
+      );
+  }, []);
+
+  useEffect(reload, [reload]);
+  useRealtime(
+    [
+      REAL_TIME_EVENTS.handoverChanged,
+      REAL_TIME_EVENTS.orderUpdated,
+      REAL_TIME_EVENTS.inventoryUpdated,
+      REAL_TIME_EVENTS.shiftOpened,
+      REAL_TIME_EVENTS.shiftClosed,
+      REAL_TIME_EVENTS.shiftAccepted,
+    ],
+    reloadStock,
+  );
+
+  const barmans = useMemo(
+    () => employees.filter((e) => e.role === 'BARMAN' && e.isActive !== false),
+    [employees],
+  );
+  const openHandovers = useMemo(
+    () => handovers.filter((h) => h.status === 'OPEN'),
+    [handovers],
+  );
+  const closedHandovers = useMemo(
+    () => handovers.filter((h) => h.status === 'CLOSED'),
+    [handovers],
+  );
+  const openBarmanCount = openHandovers.length;
+  const unacceptedCount = closedHandovers.filter((h) => !h.acceptedAt).length;
+  const onDutyIds = useMemo(
+    () =>
+      new Set(
+        shifts
+          .filter((s) => s.status === 'OPEN')
+          .map((s) => s.user?.id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    [shifts],
+  );
+
+  return (
+    <div>
       {error ? (
         <div className="mb-4">
           <Alert>{error}</Alert>
         </div>
       ) : null}
 
-      {report ? (
-        <>
-          {!report.summary.allCounted ? (
-            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              Some handovers for this day are still open — counted amounts are
-              partial.
-            </div>
-          ) : null}
-          {report.handovers === 0 && report.rows.length === 0 ? (
-            <EmptyState>No handovers or sales on this day.</EmptyState>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b border-zinc-200 text-xs uppercase tracking-wide text-zinc-400">
-                    <th className="py-2 pr-4 font-medium">Product</th>
-                    <th className="py-2 pr-4 text-right font-medium">Given</th>
-                    <th className="py-2 pr-4 text-right font-medium">Sold</th>
-                    <th className="py-2 pr-4 text-right font-medium">Expected</th>
-                    <th className="py-2 pr-4 text-right font-medium">Counted</th>
-                    <th className="py-2 text-right font-medium">Variance</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {report.rows.map((r) => (
-                    <tr key={r.product.id} className="border-b border-zinc-100 last:border-0">
-                      <td className="py-2 pr-4">
-                        <p className="font-medium text-zinc-900">{r.product.name}</p>
-                        <p className="text-xs uppercase text-zinc-400">
-                          {r.product.category?.name ?? ''} · {r.product.stockUnit}
-                        </p>
-                      </td>
-                      <td className="py-2 pr-4 text-right text-zinc-700">{fmt(r.given)}</td>
-                      <td className="py-2 pr-4 text-right text-zinc-700">{fmt(r.sold)}</td>
-                      <td className="py-2 pr-4 text-right text-zinc-700">
-                        {fmt(r.expectedRemaining)}
-                      </td>
-                      <td className="py-2 pr-4 text-right text-zinc-700">
-                        {fmt(r.counted)}
-                      </td>
-                      <td className="py-2 text-right">
-                        {r.variance == null ? (
-                          <span className="text-zinc-400">—</span>
-                        ) : r.variance === 0 ? (
-                          <span className="font-medium text-green-600">0</span>
-                        ) : (
-                          <span className="font-medium text-red-600">
-                            {fmt(r.variance)}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <GiveStockCard
+          products={products}
+          barmans={barmans}
+          openHandovers={openHandovers}
+          onDutyIds={onDutyIds}
+          onChanged={reloadStock}
+        />
+        <AlertsCard alerts={alerts} />
+      </div>
 
-          <div className="mt-4 flex flex-wrap gap-3 border-t border-zinc-100 pt-3 text-sm">
-            <p className="text-zinc-600">
-              Given <span className="font-semibold text-zinc-900">{fmt(report.summary.given)}</span>
-            </p>
-            <p className="text-zinc-600">
-              Sold <span className="font-semibold text-zinc-900">{fmt(report.summary.sold)}</span>
-            </p>
-            <p className="text-zinc-600">
-              Counted{' '}
-              <span className="font-semibold text-zinc-900">{fmt(report.summary.counted)}</span>
-            </p>
-            <p className="text-zinc-600">
-              Lines with variance{' '}
-              <span className={`font-semibold ${varianceCount === 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {varianceCount}
-              </span>
-            </p>
-          </div>
-        </>
-      ) : null}
-    </Card>
-  );
-}
+      <div className="mt-6">
+        <MyManagerStockCard
+          handovers={managerHandovers}
+          shifts={shifts}
+          openBarmanCount={openBarmanCount}
+          unacceptedCount={unacceptedCount}
+          onChanged={reloadStock}
+        />
+      </div>
 
-function ManagerView() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [handovers, setHandovers] = useState<StockHandover[]>([]);
-  const [barmanId, setBarmanId] = useState('');
-  const [qty, setQty] = useState<Record<string, string>>({});
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const reload = useCallback(() => {
-    Promise.all([api.stockHandovers(), api.products(), api.employees()])
-      .then(([h, p, e]) => {
-        setHandovers(h);
-        setProducts(p);
-        setEmployees(e);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load'));
-  }, []);
-
-  useEffect(reload, [reload]);
-
-  const barmans = useMemo(
-    () => employees.filter((e) => e.role === 'BARMAN' && e.isActive !== false),
-    [employees],
-  );
-
-  function selectBarman(id: string) {
-    setBarmanId(id);
-    const h = handovers.find(
-      (x) => x.date === todayKey() && x.barman?.id === id && x.status === 'ACTIVE',
-    );
-    const m: Record<string, string> = {};
-    for (const it of h?.items ?? []) m[it.productId] = String(it.givenQty);
-    setQty(m);
-  }
-
-  const groups = useMemo(() => {
-    const map = new Map<string, Product[]>();
-    for (const p of products) {
-      const key = p.category?.name ?? 'Other';
-      map.set(key, [...(map.get(key) ?? []), p]);
-    }
-    return [...map.entries()];
-  }, [products]);
-
-  async function save() {
-    setError(null);
-    setNotice(null);
-    if (!barmanId) {
-      setError('Select a barman to give stock to.');
-      return;
-    }
-    const items = Object.entries(qty)
-      .filter(([, v]) => v.trim() !== '' && Number(v) > 0)
-      .map(([productId, v]) => ({ productId, givenQty: Number(v) }));
-    if (items.length === 0) {
-      setError('Enter at least one quantity.');
-      return;
-    }
-    try {
-      const saved = await api.createStockHandover({ barmanId, items });
-      setNotice(`Stock handed to ${saved.barman?.name ?? 'barman'}.`);
-      reload();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to save handover');
-    }
-  }
-
-  return (
-    <div className="grid gap-6 lg:grid-cols-2">
-      <Card title="Give stock (today)">
-        <label className="text-sm font-medium text-zinc-700">Barman</label>
-        <select
-          value={barmanId}
-          onChange={(e) => selectBarman(e.target.value)}
-          className="mb-4 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm"
-        >
-          <option value="">Select a barman…</option>
-          {barmans.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </select>
-
-        {!barmanId ? (
-          <EmptyState>Select a barman to enter quantities.</EmptyState>
-        ) : (
-          <div className="max-h-[60vh] space-y-4 overflow-auto pr-1">
-            {groups.map(([category, items]) => (
-              <div key={category}>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">
-                  {category}
-                </p>
-                <div className="space-y-2">
-                  {items.map((p) => (
-                    <div
-                      key={p.id}
-                      className="flex items-center justify-between gap-3 text-sm"
-                    >
-                      <span className="min-w-0 flex-1 truncate text-zinc-900">
-                        {productLabel(p)}
-                      </span>
-                      <Input
-                        type="number"
-                        step="any"
-                        min="0"
-                        placeholder="0"
-                        className="w-28"
-                        value={qty[p.id] ?? ''}
-                        onChange={(e) =>
-                          setQty((prev) => ({ ...prev, [p.id]: e.target.value }))
-                        }
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {error ? (
-          <div className="mt-4">
-            <Alert>{error}</Alert>
-          </div>
-        ) : null}
-        {notice ? (
-          <div className="mt-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-            {notice}
-          </div>
-        ) : null}
-
-        <Button className="mt-4 w-full" onClick={save} disabled={!barmanId}>
-          Save handover
-        </Button>
-      </Card>
-
-      <Card title="All handovers">
-        {handovers.length === 0 ? (
-          <EmptyState>No stock handovers yet — give today&apos;s stock to a barman.</EmptyState>
-        ) : (
-          <div className="max-h-[70vh] space-y-3 overflow-auto pr-1">
-            {handovers.map((h) => (
-              <HandoverCard key={h.id} handover={h} />
-            ))}
-          </div>
-        )}
-      </Card>
-
-      <div className="lg:col-span-2">
-        <ReconciliationCard />
+      <div className="mt-6">
+        <ClosedHandoversCard handovers={closedHandovers} onChanged={reloadStock} />
       </div>
     </div>
   );
 }
 
-function CashierView() {
-  const [active, setActive] = useState<StockHandover[]>([]);
+function OwnerView() {
   const [handovers, setHandovers] = useState<StockHandover[]>([]);
+  const [managerHandovers, setManagerHandovers] = useState<ManagerStockHandover[]>([]);
+  const [alerts, setAlerts] = useState<StockHandoverAlert[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [shifts, setShifts] = useState<Shift[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   const reload = useCallback(() => {
-    Promise.all([api.stockHandoverActive(), api.stockHandovers()])
-      .then(([a, h]) => {
-        setActive(a);
+    Promise.all([
+      api.stockHandovers(),
+      api.managerStockHandovers(),
+      api.stockHandoverAlerts(),
+      api.employees(),
+      api.products(),
+      api.shifts(),
+    ])
+      .then(([h, mh, a, e, p, s]) => {
         setHandovers(h);
+        setManagerHandovers(mh);
+        setAlerts(a);
+        setEmployees(e);
+        setProducts(p);
+        setShifts(s);
+        setError(null);
       })
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load'));
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'Failed to load'),
+      );
+  }, []);
+
+  const reloadStock = useCallback(() => {
+    Promise.all([
+      api.stockHandovers(),
+      api.managerStockHandovers(),
+      api.stockHandoverAlerts(),
+      api.shifts(),
+    ])
+      .then(([h, mh, a, s]) => {
+        setHandovers(h);
+        setManagerHandovers(mh);
+        setAlerts(a);
+        setShifts(s);
+        setError(null);
+      })
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'Failed to load'),
+      );
   }, []);
 
   useEffect(reload, [reload]);
+  useRealtime(
+    [
+      REAL_TIME_EVENTS.handoverChanged,
+      REAL_TIME_EVENTS.orderUpdated,
+      REAL_TIME_EVENTS.inventoryUpdated,
+      REAL_TIME_EVENTS.shiftOpened,
+      REAL_TIME_EVENTS.shiftClosed,
+      REAL_TIME_EVENTS.shiftAccepted,
+    ],
+    reloadStock,
+  );
 
-  async function accept(handover: StockHandover, counts: Record<string, string>) {
-    setError(null);
-    const items = handover.items
-      .map((it) => ({
-        productId: it.productId,
-        countedQty: Number(counts[it.productId] ?? it.givenQty),
-      }))
-      .filter((i) => Number.isFinite(i.countedQty));
-    if (items.length !== handover.items.length) {
-      setError('Enter a valid count for every item.');
-      return;
-    }
-    setBusy(true);
-    try {
-      await api.countStockHandover(handover.id, items);
-      reload();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to accept count');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const today = todayKey();
-  const todayCounted = handovers.filter((h) => h.date === today && h.status === 'COUNTED');
+  const barmans = useMemo(
+    () => employees.filter((e) => e.role === 'BARMAN' && e.isActive !== false),
+    [employees],
+  );
+  const managers = useMemo(
+    () => employees.filter((e) => e.role === 'MANAGER' && e.isActive !== false),
+    [employees],
+  );
+  const openHandovers = useMemo(
+    () => handovers.filter((h) => h.status === 'OPEN'),
+    [handovers],
+  );
+  const managerOpen = managerHandovers.find((h) => h.status === 'OPEN') ?? null;
+  const onDutyIds = useMemo(
+    () =>
+      new Set(
+        shifts
+          .filter((s) => s.status === 'OPEN')
+          .map((s) => s.user?.id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    [shifts],
+  );
 
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
-      <Card title="Count & accept (open handovers)">
-        {error ? (
-          <div className="mb-4">
-            <Alert>{error}</Alert>
-          </div>
-        ) : null}
-        {active.length === 0 ? (
-          <EmptyState>No open handovers to count right now.</EmptyState>
-        ) : (
-          <div className="space-y-3">
-            {active.map((h) => (
-              <HandoverCard key={h.id} handover={h} onCount={accept} />
-            ))}
-          </div>
-        )}
-      </Card>
+    <div>
+      {error ? (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
+        </div>
+      ) : null}
 
-      <Card title={`Counted today (${today})`}>
-        {todayCounted.length === 0 ? (
-          <EmptyState>Nothing counted yet tonight.</EmptyState>
-        ) : (
-          <div className="max-h-[70vh] space-y-3 overflow-auto pr-1">
-            {todayCounted.map((h) => (
-              <HandoverCard key={h.id} handover={h} />
-            ))}
-          </div>
-        )}
-        {busy ? <p className="mt-3 text-sm text-zinc-500">Saving…</p> : null}
-      </Card>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <GiveStockToManagerCard
+          products={products}
+          managers={managers}
+          openHandover={managerOpen}
+          onChanged={reloadStock}
+        />
+        <AlertsCard alerts={alerts} />
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div>
+          <GiveStockCard
+            products={products}
+            barmans={barmans}
+            openHandovers={openHandovers}
+            onDutyIds={onDutyIds}
+            onChanged={reloadStock}
+          />
+        </div>
+        <div>
+          <ClosedManagerHandoverCard
+            handovers={managerHandovers}
+            onChanged={reloadStock}
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -477,7 +1198,18 @@ export default function HandoverPage() {
   const { user } = useAuth();
 
   if (!user) return null;
-
-  if (user.role === 'CASHIER') return <CashierView />;
+  if (user.role === 'CASHIER') {
+    return (
+      <div className="grid gap-6">
+        <Card title="Stock handover">
+          <p className="text-sm text-zinc-600">
+            The cashier no longer handles stock. Your only job is collecting
+            money from waiters (End of day).
+          </p>
+        </Card>
+      </div>
+    );
+  }
+  if (user.role === 'OWNER') return <OwnerView />;
   return <ManagerView />;
 }
