@@ -19,8 +19,10 @@ export const REAL_TIME_EVENTS = {
   orderEditDecided: 'order.edit.decided',
   shiftAccepted: 'shift.accepted',
   shiftOpened: 'shift.opened',
+  shiftClosed: 'shift.closed',
   inventoryUpdated: 'inventory.updated',
   dashboardUpdated: 'dashboard.updated',
+  handoverChanged: 'handover.changed',
 } as const;
 
 export type RealTimeEvent = (typeof REAL_TIME_EVENTS)[keyof typeof REAL_TIME_EVENTS];
@@ -45,8 +47,10 @@ const RESYNC_EVENTS: RealTimeEvent[] = [
   REAL_TIME_EVENTS.orderEditDecided,
   REAL_TIME_EVENTS.shiftAccepted,
   REAL_TIME_EVENTS.shiftOpened,
+  REAL_TIME_EVENTS.shiftClosed,
   REAL_TIME_EVENTS.inventoryUpdated,
   REAL_TIME_EVENTS.dashboardUpdated,
+  REAL_TIME_EVENTS.handoverChanged,
 ];
 
 let socket: Socket | null = null;
@@ -70,6 +74,19 @@ function getToken(): string | null {
 
 function fireLocal(event: RealTimeEvent, payload: unknown): void {
   listeners.get(event)?.forEach((handler) => handler(payload));
+}
+
+/**
+ * Route every packet received on the socket through the listener map.
+ * Registered once per connection, so subscriptions keep working across
+ * reconnects and account switches (a new Socket object never drops them).
+ */
+function bindSocketEvents(): void {
+  if (!socket) return;
+  socket.offAny();
+  socket.onAny((event: string, payload: unknown) => {
+    fireLocal(event as RealTimeEvent, payload);
+  });
 }
 
 /** Subscribe to connection status changes. Returns an unsubscribe function. */
@@ -116,6 +133,7 @@ export function connect(token: string): void {
     reconnectionAttempts: Infinity,
     auth: { token },
   });
+  bindSocketEvents();
 
   socket.on('connect', () => {
     const wasReconnect = hasConnectedBefore;
@@ -152,12 +170,8 @@ export function on(
   handlers.add(handler);
   listeners.set(event, handlers);
 
-  const wrapper = (payload: unknown) => handler(payload);
-  socket?.on(event, wrapper);
-
   return () => {
     handlers.delete(handler);
-    socket?.off(event, wrapper);
   };
 }
 

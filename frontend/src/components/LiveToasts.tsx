@@ -33,6 +33,8 @@ function messageFor(
       return canAccess(role, ['WAITER']) ? 'Your shift money was accepted' : null;
     case REAL_TIME_EVENTS.shiftOpened:
       return null;
+    case REAL_TIME_EVENTS.shiftClosed:
+      return null;
     case REAL_TIME_EVENTS.inventoryUpdated:
       return canAccess(role, ['BARMAN', 'MANAGER'])
         ? 'Inventory was updated'
@@ -42,6 +44,10 @@ function messageFor(
         ? 'An order was updated'
         : null;
     case REAL_TIME_EVENTS.dashboardUpdated:
+      return null;
+    case REAL_TIME_EVENTS.handoverChanged:
+      return null;
+    default:
       return null;
   }
 }
