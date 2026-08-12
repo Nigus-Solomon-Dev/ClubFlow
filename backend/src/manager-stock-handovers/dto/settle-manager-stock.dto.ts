@@ -1,6 +1,5 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayNotEmpty,
   IsArray,
   IsNotEmpty,
   IsNumber,
@@ -9,7 +8,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-export class StockHandoverCountItemDto {
+export class SettleManagerStockItemDto {
   @IsString()
   @IsNotEmpty()
   productId: string;
@@ -19,10 +18,9 @@ export class StockHandoverCountItemDto {
   countedQty: number;
 }
 
-export class CountStockHandoverDto {
+export class SettleManagerStockDto {
   @IsArray()
-  @ArrayNotEmpty()
   @ValidateNested({ each: true })
-  @Type(() => StockHandoverCountItemDto)
-  items: StockHandoverCountItemDto[];
+  @Type(() => SettleManagerStockItemDto)
+  items: SettleManagerStockItemDto[];
 }

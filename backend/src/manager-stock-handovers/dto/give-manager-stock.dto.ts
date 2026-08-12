@@ -4,13 +4,12 @@ import {
   IsArray,
   IsNotEmpty,
   IsNumber,
-  IsOptional,
   IsString,
   Min,
   ValidateNested,
 } from 'class-validator';
 
-export class StockHandoverItemInputDto {
+export class GiveManagerStockItemDto {
   @IsString()
   @IsNotEmpty()
   productId: string;
@@ -20,18 +19,14 @@ export class StockHandoverItemInputDto {
   givenQty: number;
 }
 
-export class CreateStockHandoverDto {
+export class GiveManagerStockDto {
   @IsString()
   @IsNotEmpty()
-  barmanId: string;
-
-  @IsOptional()
-  @IsString()
-  date?: string;
+  managerId: string;
 
   @IsArray()
   @ArrayNotEmpty()
   @ValidateNested({ each: true })
-  @Type(() => StockHandoverItemInputDto)
-  items: StockHandoverItemInputDto[];
+  @Type(() => GiveManagerStockItemDto)
+  items: GiveManagerStockItemDto[];
 }

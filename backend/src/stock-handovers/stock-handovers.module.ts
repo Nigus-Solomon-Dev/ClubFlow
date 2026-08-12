@@ -5,5 +5,6 @@ import { StockHandoversService } from './stock-handovers.service';
 @Module({
   controllers: [StockHandoversController],
   providers: [StockHandoversService],
+  exports: [StockHandoversService],
 })
 export class StockHandoversModule {}

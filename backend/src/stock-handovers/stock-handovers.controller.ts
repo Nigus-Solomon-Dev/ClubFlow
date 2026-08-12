@@ -1,19 +1,11 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Post,
-  Query,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { Role } from '../../generated/prisma/client';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { CountStockHandoverDto } from './dto/count-stock-handover.dto';
-import { CreateStockHandoverDto } from './dto/create-stock-handover.dto';
+import { CloseStockHandoverDto } from './dto/close-stock-handover.dto';
+import { GiveStockDto } from './dto/give-stock.dto';
 import { StockHandoversService } from './stock-handovers.service';
 
 @Controller('api/stock-handovers')
@@ -21,13 +13,36 @@ import { StockHandoversService } from './stock-handovers.service';
 export class StockHandoversController {
   constructor(private readonly stockHandoversService: StockHandoversService) {}
 
-  @Post()
+  // Barman clock-in: opens (or returns) the barman's open stock batch.
+  @Post('open')
+  @Roles(Role.BARMAN)
+  open(@CurrentUser('id') userId: string) {
+    return this.stockHandoversService.open(userId);
+  }
+
+  // Manager gives / tops up stock into a barman's open batch.
+  @Post('give')
   @Roles(Role.MANAGER, Role.OWNER)
-  create(
+  give(@CurrentUser('id') userId: string, @Body() dto: GiveStockDto) {
+    return this.stockHandoversService.give(userId, dto);
+  }
+
+  // Barman clock-out: records the physical count and closes the batch.
+  @Post(':id/close')
+  @Roles(Role.BARMAN)
+  close(
+    @Param('id') id: string,
     @CurrentUser('id') userId: string,
-    @Body() dto: CreateStockHandoverDto,
+    @Body() dto: CloseStockHandoverDto,
   ) {
-    return this.stockHandoversService.create(userId, dto);
+    return this.stockHandoversService.close(userId, id, dto);
+  }
+
+  // Manager accepts a closed batch after physically counting the stock.
+  @Post(':id/accept')
+  @Roles(Role.MANAGER, Role.OWNER)
+  accept(@Param('id') id: string, @CurrentUser('id') userId: string) {
+    return this.stockHandoversService.accept(id, userId);
   }
 
   @Get('mine')
@@ -36,31 +51,21 @@ export class StockHandoversController {
     return this.stockHandoversService.mine(userId);
   }
 
-  @Get('reconciliation')
-  @Roles(Role.CASHIER, Role.MANAGER, Role.OWNER)
-  reconciliation(@Query('date') date?: string) {
-    return this.stockHandoversService.reconciliation(date);
-  }
-
   @Get('active')
-  @Roles(Role.CASHIER, Role.MANAGER, Role.OWNER)
+  @Roles(Role.MANAGER, Role.OWNER)
   active() {
     return this.stockHandoversService.active();
   }
 
-  @Get()
-  @Roles(Role.MANAGER, Role.OWNER, Role.CASHIER)
-  list() {
-    return this.stockHandoversService.list();
+  @Get('alerts')
+  @Roles(Role.MANAGER, Role.OWNER)
+  alerts() {
+    return this.stockHandoversService.alerts();
   }
 
-  @Post(':id/count')
-  @Roles(Role.CASHIER, Role.MANAGER)
-  count(
-    @Param('id') id: string,
-    @CurrentUser('id') actorId: string,
-    @Body() dto: CountStockHandoverDto,
-  ) {
-    return this.stockHandoversService.count(id, actorId, dto);
+  @Get()
+  @Roles(Role.MANAGER, Role.OWNER)
+  list() {
+    return this.stockHandoversService.list();
   }
 }

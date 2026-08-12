@@ -69,8 +69,14 @@ model User {
   stockHandoverManaged  StockHandover[]        @relation("StockHandoverManager")
   stockHandoverGiven    StockHandover[]        @relation("StockHandoverBarman")
   stockHandoverClosed   StockHandover[]        @relation("StockHandoverCloser")
+  stockHandoverAccepted StockHandover[]        @relation("StockHandoverAcceptedBy")
   stockHandoverEvents   StockHandoverEvent[]
   orderCompletions      Order[]                @relation("OrderCompletedBy")
+  managerStockHandovers ManagerStockHandover[] @relation("ManagerStockHandoverManager")
+  managerStockGiven     ManagerStockHandover[] @relation("ManagerStockHandoverGivenBy")
+  managerStockClosed    ManagerStockHandover[] @relation("ManagerStockHandoverClosedBy")
+  managerStockAccepted  ManagerStockHandover[] @relation("ManagerStockHandoverAcceptedBy")
+  managerStockEvents    ManagerStockHandoverEvent[]
 
   @@index([role])
 }
@@ -101,6 +107,7 @@ model Product {
   inventoryMovements InventoryMovement[]
   sellingUnits      SellingUnit[]
   handoverItems     StockHandoverItem[]
+  managerStockHandoverItems ManagerStockHandoverItem[]
 
   @@index([categoryId])
 }
@@ -216,6 +223,7 @@ model Shift {
   expectedMoney Decimal     @default(0) @db.Decimal(10, 2)
   paidAt        DateTime?
   paidById      String?
+  isSettle      Boolean     @default(false) // manager settle (clock out) row created with the owner
 
   user   User     @relation(fields: [userId], references: [id])
   paidBy User?    @relation("ShiftPaidBy", fields: [paidById], references: [id])
@@ -226,20 +234,23 @@ model Shift {
 }
 
 model StockHandover {
-  id         String   @id @default(cuid())
-  managerId  String?
-  barmanId   String
-  status     String   @default("OPEN") // OPEN -> CLOSED
-  openedAt   DateTime @default(now())
-  closedAt   DateTime?
-  closedById String?
-  createdAt  DateTime @default(now())
+  id           String   @id @default(cuid())
+  managerId    String?
+  barmanId     String
+  status       String   @default("OPEN") // OPEN -> CLOSED
+  openedAt     DateTime @default(now())
+  closedAt     DateTime?
+  closedById   String?
+  acceptedAt   DateTime?
+  acceptedById String?
+  createdAt    DateTime @default(now())
 
-  manager  User?               @relation("StockHandoverManager", fields: [managerId], references: [id])
-  barman   User                @relation("StockHandoverBarman", fields: [barmanId], references: [id])
-  closedBy User?               @relation("StockHandoverCloser", fields: [closedById], references: [id])
-  items    StockHandoverItem[]
-  events   StockHandoverEvent[]
+  manager    User?               @relation("StockHandoverManager", fields: [managerId], references: [id])
+  barman     User                @relation("StockHandoverBarman", fields: [barmanId], references: [id])
+  closedBy   User?               @relation("StockHandoverCloser", fields: [closedById], references: [id])
+  acceptedBy User?               @relation("StockHandoverAcceptedBy", fields: [acceptedById], references: [id])
+  items      StockHandoverItem[]
+  events     StockHandoverEvent[]
 
   @@index([barmanId, status])
   @@index([status])
@@ -271,6 +282,64 @@ model StockHandoverEvent {
 
   handover StockHandover @relation(fields: [handoverId], references: [id])
   actor    User          @relation(fields: [actorId], references: [id])
+
+  @@index([handoverId])
+  @@index([createdAt])
+}
+
+// Owner -> manager stock handover. Mirrors StockHandover one level up:
+// the owner gives the manager stock, the manager closes it with a physical
+// count at his settle (clock out) with the owner, and the owner accepts it.
+model ManagerStockHandover {
+  id           String   @id @default(cuid())
+  managerId    String
+  givenById    String?
+  status       String   @default("OPEN") // OPEN -> CLOSED
+  openedAt     DateTime @default(now())
+  closedAt     DateTime?
+  closedById   String?
+  acceptedAt   DateTime?
+  acceptedById String?
+  createdAt    DateTime @default(now())
+
+  manager    User                       @relation("ManagerStockHandoverManager", fields: [managerId], references: [id])
+  givenBy    User?                      @relation("ManagerStockHandoverGivenBy", fields: [givenById], references: [id])
+  closedBy   User?                      @relation("ManagerStockHandoverClosedBy", fields: [closedById], references: [id])
+  acceptedBy User?                      @relation("ManagerStockHandoverAcceptedBy", fields: [acceptedById], references: [id])
+  items      ManagerStockHandoverItem[]
+  events     ManagerStockHandoverEvent[]
+
+  @@index([managerId, status])
+  @@index([status])
+}
+
+model ManagerStockHandoverItem {
+  id           String   @id @default(cuid())
+  handoverId   String
+  productId    String
+  givenQty     Decimal  @db.Decimal(12, 4) // running total of stock units given to the manager
+  givenAwayQty Decimal  @default(0) @db.Decimal(12, 4) // stock units already handed to barmans
+  countedQty   Decimal? @db.Decimal(12, 4) // physical count back at the manager settle (stock units)
+  consumedQty  Decimal? @db.Decimal(12, 4) // given - counted, snapshotted on close
+  variance     Decimal? @db.Decimal(12, 4) // (given - downstream) - counted, snapshotted on close
+
+  handover ManagerStockHandover @relation(fields: [handoverId], references: [id])
+  product  Product              @relation(fields: [productId], references: [id])
+
+  @@unique([handoverId, productId])
+  @@index([productId])
+}
+
+model ManagerStockHandoverEvent {
+  id         String   @id @default(cuid())
+  handoverId String
+  actorId    String
+  action     String   // OPEN | GIVE | CLOSE | ACCEPT
+  items      Json?    // [{ productId, qty }] for GIVE events
+  createdAt  DateTime @default(now())
+
+  handover ManagerStockHandover @relation(fields: [handoverId], references: [id])
+  actor    User                 @relation(fields: [actorId], references: [id])
 
   @@index([handoverId])
   @@index([createdAt])

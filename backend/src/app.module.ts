@@ -8,6 +8,7 @@ import { CategoriesModule } from './categories/categories.module';
 import { EmployeesModule } from './employees/employees.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { ManagerModule } from './manager/manager.module';
+import { ManagerStockHandoversModule } from './manager-stock-handovers/manager-stock-handovers.module';
 import { OrdersModule } from './orders/orders.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RealtimeModule } from './realtime/realtime.module';
@@ -36,6 +37,7 @@ import { SettlementsModule } from './settlements/settlements.module';
     OrdersModule,
     ShiftsModule,
     StockHandoversModule,
+    ManagerStockHandoversModule,
     ReportsModule,
     SettlementsModule,
   ],
