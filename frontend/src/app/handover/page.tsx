@@ -1,9 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import AppShell from '@/components/AppShell';
 import {
   Alert,
-  Badge,
   Button,
   Card,
   EmptyState,
@@ -12,7 +12,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useRealtime } from '@/hooks/useRealtime';
 import { api } from '@/services/api';
 import { REAL_TIME_EVENTS } from '@/services/realtime';
-import { formatLeft, giveUnit } from '@/lib/stock';
+import { giveUnit } from '@/lib/stock';
 import StockItemsList from '@/components/stock/StockItemsList';
 import type {
   Employee,
@@ -20,7 +20,6 @@ import type {
   Product,
   Shift,
   StockHandover,
-  StockHandoverAlert,
 } from '@/types';
 
 interface GiveLine {
@@ -135,6 +134,7 @@ function GiveStockCard({
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to hand over stock');
+      setTimeout(() => setError(null), 3500);
     } finally {
       setBusy(false);
     }
@@ -398,6 +398,7 @@ function GiveStockToManagerCard({
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to hand over stock');
+      setTimeout(() => setError(null), 3500);
     } finally {
       setBusy(false);
     }
@@ -564,65 +565,6 @@ function GiveStockToManagerCard({
   );
 }
 
-function AlertsCard({ alerts }: { alerts: StockHandoverAlert[] }) {
-  const empties = alerts.filter((a) => a.level === 'empty');
-  const warns = alerts.filter((a) => a.level === 'warn');
-
-  return (
-    <Card title="Running low — alerts">
-      {alerts.length === 0 ? (
-        <EmptyState>No drink is running low right now.</EmptyState>
-      ) : (
-        <>
-          {empties.length > 0 ? (
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-red-500">
-              Out of stock
-            </p>
-          ) : null}
-          <ul className="space-y-1">
-            {empties.map((a) => (
-              <li
-                key={`${a.handoverId}-${a.product.id}`}
-                className="flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm"
-              >
-                <div className="min-w-0">
-                  <p className="truncate font-semibold text-red-800">
-                    {a.product.name}
-                  </p>
-                  <p className="text-xs text-red-600">{a.barman.name}</p>
-                </div>
-                <Badge tone="red">0 left</Badge>
-              </li>
-            ))}
-          </ul>
-
-          {warns.length > 0 ? (
-            <p className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-amber-500">
-              Below one full unit
-            </p>
-          ) : null}
-          <ul className="space-y-1">
-            {warns.map((a) => (
-              <li
-                key={`${a.handoverId}-${a.product.id}`}
-                className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm"
-              >
-                <div className="min-w-0">
-                  <p className="truncate font-semibold text-amber-800">
-                    {a.product.name}
-                  </p>
-                  <p className="text-xs text-amber-600">{a.barman.name}</p>
-                </div>
-                <Badge tone="amber">{formatLeft(a.product, a.left)} left</Badge>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-    </Card>
-  );
-}
-
 function ClosedHandoversCard({
   handovers,
   onChanged,
@@ -641,6 +583,7 @@ function ClosedHandoversCard({
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to accept stock');
+      setTimeout(() => setError(null), 3500);
     } finally {
       setAcceptingId(null);
     }
@@ -708,6 +651,7 @@ function ClosedManagerHandoverCard({
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to accept stock');
+      setTimeout(() => setError(null), 3500);
     } finally {
       setAcceptingId(null);
     }
@@ -757,36 +701,17 @@ function ClosedManagerHandoverCard({
   );
 }
 
-function MyManagerStockCard({
-  handovers,
+function ManagerCashDropCard({
   shifts,
-  openBarmanCount,
-  unacceptedCount,
   onChanged,
 }: {
-  handovers: ManagerStockHandover[];
   shifts: Shift[];
-  openBarmanCount: number;
-  unacceptedCount: number;
   onChanged: () => void;
 }) {
   const { user } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-
-  const open = handovers.find((h) => h.status === 'OPEN');
-  const recent = useMemo(() => {
-    if (open) return open;
-    const closed = handovers
-      .filter((h) => h.status === 'CLOSED')
-      .sort(
-        (a, b) =>
-          new Date(b.closedAt ?? b.openedAt).getTime() -
-          new Date(a.closedAt ?? a.openedAt).getTime(),
-      );
-    return closed[0] ?? null;
-  }, [handovers, open]);
 
   const pendingSettle = useMemo(
     () =>
@@ -823,42 +748,28 @@ function MyManagerStockCard({
       .reduce((sum, s) => sum + Number(s.expectedMoney ?? 0), 0);
   }, [shifts, pendingSettle, lastSettle, user]);
 
-  async function doSettle() {
+  async function doCashDrop() {
     setError(null);
     setNotice(null);
-    const items = (open?.items ?? []).map((it) => ({
-      productId: it.productId,
-      countedQty: it.left,
-    }));
     setBusy(true);
     try {
-      const res = await api.managerStockSettle(items);
+      const res = await api.managerCashDrop();
       setNotice(
-        `Settled with the owner. Money to give: ${Number(
-          res.shift.expectedMoney,
-        ).toFixed(2)} — the owner accepts it on the End of day screen.${
-          res.stock ? ' Stock closed for the owner to accept.' : ''
-        }`,
+        `Cash dropped to the owner. Money to give: ${Number(
+          res.expectedMoney,
+        ).toFixed(2)} — waiting for owner to accept.`,
       );
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to settle');
+      setError(e instanceof Error ? e.message : 'Failed to drop cash');
+      setTimeout(() => setError(null), 3500);
     } finally {
       setBusy(false);
     }
   }
 
-  const blockedByBarman =
-    openBarmanCount > 0 || unacceptedCount > 0;
-  const blockedMessage =
-    openBarmanCount > 0
-      ? `You cannot settle with the owner until every barman&apos;s stock batch is counted and closed (${openBarmanCount} still open).`
-      : unacceptedCount > 0
-        ? `Accept the counted barman stock first before settling — their returned stock lands back in your balance (${unacceptedCount} waiting).`
-        : null;
-
   return (
-    <Card title="My stock & settle">
+    <Card title="Cash Balance">
       {error ? (
         <div className="mb-4">
           <Alert>{error}</Alert>
@@ -870,43 +781,132 @@ function MyManagerStockCard({
         </div>
       ) : null}
 
-      <div className="mb-4 grid grid-cols-2 gap-3">
-        <div className="rounded-lg border border-zinc-200 p-3">
-          <p className="text-xs font-medium text-zinc-500">Money to give (to the owner)</p>
-          <p className="mt-1 text-xl font-semibold text-zinc-900">
-            {moneyToGive.toFixed(2)}
+      <div className="rounded-lg border border-zinc-200 p-3 text-center">
+        <p className="text-sm font-medium text-zinc-500">Money to give (to the owner)</p>
+        <p className="mt-2 text-3xl font-bold text-zinc-900">
+          {moneyToGive.toFixed(2)}
+        </p>
+        
+        {pendingSettle ? (
+          <p className="mt-2 text-sm font-medium text-amber-600">
+            Waiting for the owner to accept your last drop.
           </p>
-          {pendingSettle ? (
-            <p className="mt-1 text-xs text-amber-600">
-              Waiting for the owner to accept your last settle.
-            </p>
-          ) : null}
-        </div>
-        <div className="rounded-lg border border-zinc-200 p-3">
-          <p className="text-xs font-medium text-zinc-500">Owner stock balance</p>
-          <p className="mt-1 text-xl font-semibold text-zinc-900">
-            {recent
-              ? recent.status === 'OPEN'
-                ? 'Open'
-                : 'Closed'
-              : 'None'}
+        ) : lastSettle?.paidAt ? (
+          <p className="mt-2 text-sm font-medium text-green-600">
+            Last drop accepted by owner {fmtTime(lastSettle.paidAt)}
           </p>
-          {recent && recent.status === 'OPEN' ? (
-            <p className="mt-1 text-xs text-zinc-500">
-              given {recent.items.length} item
-              {recent.items.length === 1 ? '' : 's'} · since{' '}
-              {new Date(recent.openedAt).toLocaleDateString()}
-            </p>
-          ) : recent && recent.acceptedAt ? (
-            <p className="mt-1 text-xs text-green-600">
-              Accepted by the owner {fmtTime(recent.acceptedAt)}
-            </p>
-          ) : recent && recent.status === 'CLOSED' ? (
-            <p className="mt-1 text-xs text-amber-600">
-              Waiting for the owner to accept the count.
-            </p>
-          ) : null}
+        ) : null}
+      </div>
+
+      <Button
+        className="mt-4 w-full"
+        onClick={doCashDrop}
+        disabled={busy || Boolean(pendingSettle) || moneyToGive <= 0}
+      >
+        {busy
+          ? 'Handing over…'
+          : pendingSettle
+          ? 'Waiting for the owner'
+          : 'Hand over cash'}
+      </Button>
+    </Card>
+  );
+}
+
+function ManagerStockCloseCard({
+  handovers,
+  openBarmanCount,
+  unacceptedCount,
+  onChanged,
+}: {
+  handovers: ManagerStockHandover[];
+  openBarmanCount: number;
+  unacceptedCount: number;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const open = handovers.find((h) => h.status === 'OPEN');
+  const recent = useMemo(() => {
+    if (open) return open;
+    const closed = handovers
+      .filter((h) => h.status === 'CLOSED')
+      .sort(
+        (a, b) =>
+          new Date(b.closedAt ?? b.openedAt).getTime() -
+          new Date(a.closedAt ?? a.openedAt).getTime(),
+      );
+    return closed[0] ?? null;
+  }, [handovers, open]);
+
+  async function doCloseStock() {
+    setError(null);
+    setNotice(null);
+    const items = (open?.items ?? []).map((it) => ({
+      productId: it.productId,
+      countedQty: it.left,
+    }));
+    setBusy(true);
+    try {
+      await api.managerStockClose(items);
+      setNotice('Stock counted and closed. Waiting for the owner to accept.');
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to close stock');
+      setTimeout(() => setError(null), 3500);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const blockedByBarman =
+    openBarmanCount > 0 || unacceptedCount > 0;
+  const blockedMessage =
+    openBarmanCount > 0
+      ? `You cannot close your stock until every barman's stock batch is counted and closed (${openBarmanCount} still open).`
+      : unacceptedCount > 0
+        ? `Accept the counted barman stock first before closing yours — their returned stock lands back in your balance (${unacceptedCount} waiting).`
+        : null;
+
+  return (
+    <Card title="My Stock">
+      {error ? (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
         </div>
+      ) : null}
+      {notice ? (
+        <div className="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+          {notice}
+        </div>
+      ) : null}
+
+      <div className="mb-4 rounded-lg border border-zinc-200 p-3">
+        <p className="text-xs font-medium text-zinc-500">Owner stock balance</p>
+        <p className="mt-1 text-xl font-semibold text-zinc-900">
+          {recent
+            ? recent.status === 'OPEN'
+              ? 'Open'
+              : 'Closed'
+            : 'None'}
+        </p>
+        {recent && recent.status === 'OPEN' ? (
+          <p className="mt-1 text-xs text-zinc-500">
+            given {recent.items.length} item
+            {recent.items.length === 1 ? '' : 's'} · since{' '}
+            {new Date(recent.openedAt).toLocaleDateString()}
+          </p>
+        ) : recent && recent.acceptedAt ? (
+          <p className="mt-1 text-xs text-green-600">
+            Accepted by the owner {fmtTime(recent.acceptedAt)}
+          </p>
+        ) : recent && recent.status === 'CLOSED' ? (
+          <p className="mt-1 text-xs text-amber-600">
+            Waiting for the owner to accept the count.
+          </p>
+        ) : null}
       </div>
 
       {open ? (
@@ -915,8 +915,7 @@ function MyManagerStockCard({
         </>
       ) : (
         <EmptyState>
-          The owner has not given you stock yet. Money settling still works
-          without an owner stock balance.
+          The owner has not given you stock yet.
         </EmptyState>
       )}
 
@@ -928,14 +927,14 @@ function MyManagerStockCard({
 
       <Button
         className="mt-4 w-full"
-        onClick={doSettle}
-        disabled={busy || blockedByBarman || Boolean(pendingSettle)}
+        onClick={doCloseStock}
+        disabled={busy || blockedByBarman || !open}
       >
         {busy
-          ? 'Settling…'
-          : pendingSettle
-          ? 'Waiting for the owner'
-          : 'Settle with the owner (clock out)'}
+          ? 'Closing…'
+          : !open
+          ? 'No open stock to close'
+          : 'Count & Close Stock'}
       </Button>
     </Card>
   );
@@ -944,7 +943,7 @@ function MyManagerStockCard({
 function ManagerView() {
   const [handovers, setHandovers] = useState<StockHandover[]>([]);
   const [managerHandovers, setManagerHandovers] = useState<ManagerStockHandover[]>([]);
-  const [alerts, setAlerts] = useState<StockHandoverAlert[]>([]);
+  
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
@@ -954,15 +953,13 @@ function ManagerView() {
     Promise.all([
       api.stockHandovers(),
       api.managerStockHandovers(),
-      api.stockHandoverAlerts(),
       api.employees(),
       api.products(),
       api.shifts(),
     ])
-      .then(([h, mh, a, e, p, s]) => {
+      .then(([h, mh, e, p, s]) => {
         setHandovers(h);
         setManagerHandovers(mh);
-        setAlerts(a);
         setEmployees(e);
         setProducts(p);
         setShifts(s);
@@ -978,13 +975,11 @@ function ManagerView() {
     Promise.all([
       api.stockHandovers(),
       api.managerStockHandovers(),
-      api.stockHandoverAlerts(),
       api.shifts(),
     ])
-      .then(([h, mh, a, s]) => {
+      .then(([h, mh, s]) => {
         setHandovers(h);
         setManagerHandovers(mh);
-        setAlerts(a);
         setShifts(s);
         setError(null);
       })
@@ -1047,13 +1042,16 @@ function ManagerView() {
           onDutyIds={onDutyIds}
           onChanged={reloadStock}
         />
-        <AlertsCard alerts={alerts} />
+        
       </div>
 
-      <div className="mt-6">
-        <MyManagerStockCard
-          handovers={managerHandovers}
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <ManagerCashDropCard
           shifts={shifts}
+          onChanged={reloadStock}
+        />
+        <ManagerStockCloseCard
+          handovers={managerHandovers}
           openBarmanCount={openBarmanCount}
           unacceptedCount={unacceptedCount}
           onChanged={reloadStock}
@@ -1067,10 +1065,116 @@ function ManagerView() {
   );
 }
 
+function OwnerCashAcceptCard({
+  shifts,
+  onChanged,
+}: {
+  shifts: Shift[];
+  onChanged: () => void;
+}) {
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function accept(shiftId: string) {
+    setError(null);
+    setAcceptingId(shiftId);
+    try {
+      await api.acceptShift(shiftId);
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to accept cash');
+      setTimeout(() => setError(null), 3500);
+    } finally {
+      setAcceptingId(null);
+    }
+  }
+
+  const pending = shifts.filter(
+    (s) => s.isSettle && s.user?.role === 'MANAGER' && !s.paidAt,
+  );
+
+  const recentlyAccepted = shifts
+    .filter((s) => s.isSettle && s.user?.role === 'MANAGER' && s.paidAt)
+    .sort((a, b) => new Date(b.paidAt!).getTime() - new Date(a.paidAt!).getTime())
+    .slice(0, 3);
+
+  return (
+    <Card title="Accept Manager Cash Drops">
+      {error ? (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
+        </div>
+      ) : null}
+
+      {pending.length === 0 ? (
+        <EmptyState>No pending cash drops from managers.</EmptyState>
+      ) : (
+        <div className="grid gap-4">
+          {pending.map((s) => (
+            <div key={s.id} className="rounded-lg border border-zinc-200 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-semibold text-zinc-900">
+                    {s.user?.name ?? 'Manager'}
+                  </p>
+                  <p className="text-xs text-zinc-500">
+                    Dropped at {fmtTime(s.endedAt ?? s.startedAt)}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xl font-bold text-zinc-900">
+                    {Number(s.expectedMoney).toFixed(2)}
+                  </p>
+                  <p className="text-xs font-medium text-zinc-500">
+                    Cash to collect
+                  </p>
+                </div>
+              </div>
+              <Button
+                className="mt-4 w-full"
+                onClick={() => accept(s.id)}
+                disabled={acceptingId === s.id}
+              >
+                {acceptingId === s.id ? 'Accepting…' : 'Accept Money'}
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {recentlyAccepted.length > 0 ? (
+        <div className="mt-6">
+          <p className="mb-3 text-sm font-medium text-zinc-700">Recently accepted</p>
+          <ul className="space-y-2">
+            {recentlyAccepted.map((s) => (
+              <li
+                key={s.id}
+                className="flex items-center justify-between rounded-lg border border-green-100 bg-green-50 px-4 py-3"
+              >
+                <div>
+                  <p className="font-medium text-green-900">
+                    {s.user?.name ?? 'Manager'}
+                  </p>
+                  <p className="text-xs text-green-700">
+                    Accepted {fmtTime(s.paidAt!)}
+                  </p>
+                </div>
+                <p className="font-bold text-green-900">
+                  {Number(s.expectedMoney).toFixed(2)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
 function OwnerView() {
   const [handovers, setHandovers] = useState<StockHandover[]>([]);
   const [managerHandovers, setManagerHandovers] = useState<ManagerStockHandover[]>([]);
-  const [alerts, setAlerts] = useState<StockHandoverAlert[]>([]);
+  
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [shifts, setShifts] = useState<Shift[]>([]);
@@ -1080,15 +1184,13 @@ function OwnerView() {
     Promise.all([
       api.stockHandovers(),
       api.managerStockHandovers(),
-      api.stockHandoverAlerts(),
       api.employees(),
       api.products(),
       api.shifts(),
     ])
-      .then(([h, mh, a, e, p, s]) => {
+      .then(([h, mh, e, p, s]) => {
         setHandovers(h);
         setManagerHandovers(mh);
-        setAlerts(a);
         setEmployees(e);
         setProducts(p);
         setShifts(s);
@@ -1103,13 +1205,11 @@ function OwnerView() {
     Promise.all([
       api.stockHandovers(),
       api.managerStockHandovers(),
-      api.stockHandoverAlerts(),
       api.shifts(),
     ])
-      .then(([h, mh, a, s]) => {
+      .then(([h, mh, s]) => {
         setHandovers(h);
         setManagerHandovers(mh);
-        setAlerts(a);
         setShifts(s);
         setError(null);
       })
@@ -1163,14 +1263,17 @@ function OwnerView() {
         </div>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="mb-6 grid gap-6 lg:grid-cols-2">
         <GiveStockToManagerCard
           products={products}
           managers={managers}
           openHandover={managerOpen}
           onChanged={reloadStock}
         />
-        <AlertsCard alerts={alerts} />
+        <OwnerCashAcceptCard
+          shifts={shifts}
+          onChanged={reloadStock}
+        />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -1210,6 +1313,16 @@ export default function HandoverPage() {
       </div>
     );
   }
-  if (user.role === 'OWNER') return <OwnerView />;
-  return <ManagerView />;
+  if (user.role === 'OWNER') {
+    return (
+      <AppShell>
+        <OwnerView />
+      </AppShell>
+    );
+  }
+  return (
+    <AppShell>
+      <ManagerView />
+    </AppShell>
+  );
 }
