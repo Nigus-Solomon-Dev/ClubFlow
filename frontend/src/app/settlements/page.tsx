@@ -59,6 +59,7 @@ export default function SettlementsPage() {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      setTimeout(() => setError(null), 3500);
     } finally {
       setBusy(false);
     }
@@ -75,6 +76,7 @@ export default function SettlementsPage() {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      setTimeout(() => setError(null), 3500);
     } finally {
       setBusy(false);
     }
@@ -111,6 +113,11 @@ export default function SettlementsPage() {
     canAccept &&
     s.user?.id !== user?.id &&
     acceptTargets[user!.role] === s.user?.role;
+
+  const pendingShifts = useMemo(
+    () => shifts.filter((s) => s.user?.role !== 'MANAGER'),
+    [shifts],
+  );
 
   return (
     <AppShell>
@@ -155,12 +162,12 @@ export default function SettlementsPage() {
           </div>
 
           <Card title={today.isClosed ? 'Day closed — summary' : 'Money to give'}>
-            {shifts.length === 0 ? (
+            {pendingShifts.length === 0 ? (
               <EmptyState>No shifts closed yet today.</EmptyState>
             ) : (
               <>
                 <ul className="divide-y divide-zinc-100">
-                  {shifts.map((s) => (
+                  {pendingShifts.map((s) => (
                     <li
                       key={s.id}
                       className="flex flex-wrap items-center justify-between gap-3 py-3"
