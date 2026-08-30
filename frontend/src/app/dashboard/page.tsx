@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import { Badge, Card, EmptyState, StatCard } from '@/components/ui';
@@ -7,19 +8,17 @@ import { useRealtime } from '@/hooks/useRealtime';
 import { api } from '@/services/api';
 import { REAL_TIME_EVENTS } from '@/services/realtime';
 import { formatLeft } from '@/lib/stock';
-import type { Dashboard, SalesReport, StockHandoverAlert } from '@/types';
+import type { Dashboard, StockHandoverAlert } from '@/types';
 
 export default function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
-  const [sales, setSales] = useState<SalesReport | null>(null);
   const [alerts, setAlerts] = useState<StockHandoverAlert[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    Promise.all([api.dashboard(), api.salesReport(), api.stockHandoverAlerts()])
-      .then(([d, s, a]) => {
+    Promise.all([api.dashboard(), api.stockHandoverAlerts()])
+      .then(([d, a]) => {
         setData(d);
-        setSales(s);
         setAlerts(a);
         setError(null);
       })
@@ -45,7 +44,7 @@ export default function DashboardPage() {
     );
   }
 
-  if (!data || !sales) {
+  if (!data) {
     return (
       <AppShell>
         <EmptyState>Loading dashboard…</EmptyState>
@@ -55,13 +54,11 @@ export default function DashboardPage() {
 
   const stats = [
     { label: 'Revenue today', value: data.today.revenue ?? '0', hint: 'completed orders' },
-    { label: 'Orders today', value: data.today.orders, hint: `${sales.orders} completed total` },
     { label: 'Products', value: data.totals.products, hint: `${data.totals.categories} categories` },
     { label: 'Tables', value: data.totals.activeTables, hint: `${data.totals.tables} total` },
     { label: 'Employees', value: data.totals.employees, hint: 'active accounts' },
     { label: 'Low stock', value: data.totals.lowStockItems, hint: 'items qty < 5' },
     { label: 'Open shifts', value: data.totals.openShifts, hint: 'staff on the clock' },
-    { label: 'Pending orders', value: data.totals.pendingOrders, hint: 'draft or sent' },
   ];
 
   return (
@@ -78,14 +75,6 @@ export default function DashboardPage() {
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <Card title="Today's sales">
-          <dl className="space-y-3 text-sm">
-            <Row label="Revenue" value={String(sales.revenue ?? 0)} />
-            <Row label="Completed orders" value={String(sales.orders)} />
-            <Row label="Line items sold" value={String(sales.items)} />
-            <Row label="Avg order value" value={sales.averageOrderValue.toFixed(2)} />
-          </dl>
-        </Card>
         <Card title="Operations">
           <ul className="space-y-2 text-sm text-zinc-600">
             <li className="flex items-center justify-between">
@@ -132,17 +121,16 @@ export default function DashboardPage() {
               ))}
             </ul>
           )}
+          <div className="mt-4">
+            <Link
+              href="/handover"
+              className="inline-flex items-center justify-center gap-1 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700"
+            >
+              Go to stock
+            </Link>
+          </div>
         </Card>
       </div>
     </AppShell>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <dt className="text-zinc-500">{label}</dt>
-      <dd className="font-semibold text-zinc-900">{value}</dd>
-    </div>
   );
 }
