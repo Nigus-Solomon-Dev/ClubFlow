@@ -18,18 +18,18 @@ import { TablesService } from './tables.service';
 
 @Controller('api/tables')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.MANAGER)
+@Roles(Role.MANAGER, Role.OWNER)
 export class TablesController {
   constructor(private readonly tablesService: TablesService) {}
 
   @Get()
-  @Roles(Role.MANAGER, Role.WAITER, Role.BARMAN, Role.CASHIER)
+  @Roles(Role.MANAGER, Role.OWNER, Role.WAITER, Role.BARMAN, Role.CASHIER)
   findAll() {
     return this.tablesService.findAll();
   }
 
   @Get(':id')
-  @Roles(Role.MANAGER, Role.WAITER, Role.BARMAN, Role.CASHIER)
+  @Roles(Role.MANAGER, Role.OWNER, Role.WAITER, Role.BARMAN, Role.CASHIER)
   findOne(@Param('id') id: string) {
     return this.tablesService.findOne(id);
   }
