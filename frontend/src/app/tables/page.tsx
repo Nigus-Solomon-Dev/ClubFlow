@@ -30,6 +30,7 @@ export default function TablesPage() {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      setTimeout(() => setError(null), 3500);
     }
   }
 
