@@ -12,8 +12,9 @@ import type { SellingUnit } from '@/types';
 
 /** Minimal shape a stock helper needs from a product (Product or handover product). */
 export interface StockProductLike {
-  stockUnit: string;
+  stockUnit?: string | null;
   piecesPerCase?: number | null;
+  category?: { name: string } | null;
   sellingUnits?: SellingUnit[];
 }
 
@@ -51,7 +52,17 @@ export function subUnitOf(product: StockProductLike): SellingUnit | null {
 
 /** True when the product is stocked per piece (beer/soft/red bull). */
 export function isPieceProduct(product: StockProductLike): boolean {
-  return product.stockUnit === 'Piece';
+  if (product.stockUnit === 'Bottle') return false;
+  if (product.category?.name === 'Alcohol') return false;
+  if (
+    product.sellingUnits &&
+    product.sellingUnits.some((u) =>
+      ['bottle', 'half', 'double', 'shot'].includes(u.name.toLowerCase()),
+    )
+  ) {
+    return false;
+  }
+  return product.stockUnit === 'Piece' || (!product.stockUnit && product.category?.name !== 'Alcohol');
 }
 
 /** Decompose a stock quantity into everyday units for display/counting. */
