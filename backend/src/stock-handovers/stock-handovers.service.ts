@@ -647,6 +647,94 @@ export class StockHandoversService {
     });
   }
 
+  /**
+   * Real stock still in staff's hands per product, straight from the
+   * owner-handover model: what open manager balances hold plus what open
+   * barman batches have left (given - sold). This is the figure the owner
+   * reconciles against, not the loose manual inventory counter.
+   */
+  async summary() {
+    const barmanOpen = await this.prisma.stockHandover.findMany({
+      where: { status: { not: 'CLOSED' } },
+      include: {
+        barman: { select: { id: true } },
+        items: { select: { id: true, productId: true, givenQty: true } },
+      },
+    });
+
+    const managerOpen = await this.prisma.managerStockHandover.findMany({
+      where: { status: { not: 'CLOSED' } },
+      include: {
+        items: {
+          select: {
+            id: true,
+            productId: true,
+            givenQty: true,
+            givenAwayQty: true,
+          },
+        },
+      },
+    });
+
+    const barmanInHand = new Map<string, number>();
+    for (const h of barmanOpen) {
+      const sold = await this.soldMap(
+        h.barman?.id ?? '',
+        h.openedAt,
+        new Date(),
+      );
+      for (const it of h.items) {
+        const left = this.round(
+          Number(it.givenQty) - (sold.get(it.productId) ?? 0),
+        );
+        if (left > 0) {
+          barmanInHand.set(
+            it.productId,
+            (barmanInHand.get(it.productId) ?? 0) + left,
+          );
+        }
+      }
+    }
+
+    const managerInHand = new Map<string, number>();
+    for (const h of managerOpen) {
+      for (const it of h.items) {
+        const left = this.round(Number(it.givenQty) - Number(it.givenAwayQty));
+        if (left > 0) {
+          managerInHand.set(
+            it.productId,
+            (managerInHand.get(it.productId) ?? 0) + left,
+          );
+        }
+      }
+    }
+
+    const productIds = [
+      ...new Set([...barmanInHand.keys(), ...managerInHand.keys()]),
+    ];
+    if (productIds.length === 0) return [];
+
+    const products = await this.prisma.product.findMany({
+      where: { id: { in: productIds } },
+      select: { id: true, name: true, stockUnit: true },
+    });
+
+    return products
+      .map((p) => {
+        const barman = this.round(barmanInHand.get(p.id) ?? 0);
+        const manager = this.round(managerInHand.get(p.id) ?? 0);
+        return {
+          productId: p.id,
+          name: p.name,
+          stockUnit: p.stockUnit,
+          barman,
+          manager,
+          total: this.round(barman + manager),
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   private async soldMap(
     barmanId: string,
     start: Date,
@@ -674,10 +762,19 @@ export class StockHandoversService {
     return map;
   }
 
+  private isPieceProduct(product: { stockUnit?: string | null; category?: { name?: string } | null; sellingUnits?: any[] }): boolean {
+    if (product.stockUnit === 'Bottle') return false;
+    if (product.category?.name === 'Alcohol') return false;
+    if (product.sellingUnits?.some((u) => ['bottle', 'half', 'double', 'shot'].includes(u.name.toLowerCase()))) {
+      return false;
+    }
+    return product.stockUnit === 'Piece';
+  }
+
   private thresholdFor(product: ProductLike): number {
     // Warn when less than one full giving unit is left:
     // alcohol -> less than a bottle, beer/soft -> less than one case.
-    if (product.stockUnit === 'Piece') {
+    if (this.isPieceProduct(product)) {
       return product.piecesPerCase ?? 24;
     }
     return 1;
@@ -738,6 +835,7 @@ export class StockHandoversService {
       | {
           stockUnit: string;
           piecesPerCase: number | null;
+          category?: { name: string };
           sellingUnits?: Array<{
             name: string;
             stockConsumption: number | Prisma.Decimal | null;
@@ -748,7 +846,7 @@ export class StockHandoversService {
   ): string {
     if (!product) return `${this.round(qty)}`;
     const perCase = product.piecesPerCase ?? 24;
-    if (product.stockUnit === 'Piece') {
+    if (this.isPieceProduct(product)) {
       const kasa = Math.floor(qty / perCase);
       const pieces = this.round(qty - kasa * perCase);
       const parts: string[] = [];
