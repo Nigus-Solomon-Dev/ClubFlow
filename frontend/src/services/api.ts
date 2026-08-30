@@ -29,6 +29,7 @@ import type {
   OrderEditRequest,
   OrderStatus,
   Product,
+  ProductStockSummary,
   RegisterDto,
   RestaurantTable,
   SalesReport,
@@ -124,6 +125,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    cache: 'no-store',
   });
 
   if (res.status === 401 && access && refreshOn401) {
@@ -187,12 +189,23 @@ export const api = {
 
   // Products
   products: () => request<Product[]>('/products'),
+  productStockSummary: () =>
+    request<ProductStockSummary[]>('/stock-handovers/summary'),
   createProduct: (body: {
     name: string;
     categoryId: string;
     price: number;
     unit?: string;
     isAvailable?: boolean;
+    piecesPerCase?: number;
+    initialPieces?: number;
+    bottlePrice?: number;
+    sellingUnits?: Array<{
+      name: string;
+      price: number;
+      stockConsumption: number;
+      isDefault: boolean;
+    }>;
   }) => request<Product>('/products', { method: 'POST', body }),
   updateProduct: (id: string, body: Partial<Product>) =>
     request<Product>(`/products/${id}`, { method: 'PATCH', body }),
@@ -310,11 +323,12 @@ export const api = {
     managerId: string;
     items: { productId: string; givenQty: number }[];
   }) => request<ManagerStockHandover>('/manager-stock-handovers/give', { method: 'POST', body }),
-  managerStockSettle: (items: { productId: string; countedQty: number }[]) =>
-    request<ManagerSettleResult>('/manager-stock-handovers/settle', {
+  managerStockClose: (items: { productId: string; countedQty: number }[]) =>
+    request<{ stock: ManagerStockHandover | null }>('/manager-stock-handovers/close', {
       method: 'POST',
       body: { items },
     }),
+  managerCashDrop: () => request<Shift>('/shifts/manager-drop', { method: 'POST' }),
   acceptManagerStockHandover: (id: string) =>
     request<ManagerStockHandover>(`/manager-stock-handovers/${id}/accept`, {
       method: 'POST',
