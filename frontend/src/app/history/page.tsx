@@ -59,6 +59,7 @@ function WaiterHistory() {
     [
       REAL_TIME_EVENTS.shiftAccepted,
       REAL_TIME_EVENTS.shiftOpened,
+      REAL_TIME_EVENTS.shiftClosed,
       REAL_TIME_EVENTS.orderUpdated,
     ],
     refresh,
@@ -85,9 +86,16 @@ function WaiterHistory() {
 
   const history = useMemo(
     () =>
-      mine.slice().sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-      ),
+      mine
+        .filter((o) => {
+          if (!o.shift) return false;
+          if (o.shift.status === 'OPEN') return true;
+          return isToday(o.createdAt) && !o.shift.paidAt;
+        })
+        .slice()
+        .sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        ),
     [mine],
   );
 
@@ -201,6 +209,7 @@ function BarmanStockCard() {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to clock in');
+      setTimeout(() => setError(null), 3500);
     } finally {
       setBusy(false);
     }
@@ -214,6 +223,7 @@ function BarmanStockCard() {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to clock out');
+      setTimeout(() => setError(null), 3500);
     } finally {
       setBusy(false);
     }
