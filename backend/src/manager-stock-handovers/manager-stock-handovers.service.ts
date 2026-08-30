@@ -145,20 +145,17 @@ export class ManagerStockHandoversService {
   }
 
   /**
-   * The manager's single "clock out / settle" action, done face to face with
-   * the owner. It (1) blocks until every barman stock batch is closed,
-   * (2) creates the manager's money shift row = the cashier money the manager
-   * accepted since the last settle, and (3) closes the manager's own
-   * owner-given stock with the physical count.
+   * The manager's action to close their stock batch with a physical count.
+   * It blocks until every barman stock batch is closed and accepted.
    */
-  async settle(user: { id: string; role: string }, dto: SettleManagerStockDto) {
+  async closeStock(user: { id: string; role: string }, dto: SettleManagerStockDto) {
     const openBarman = await this.prisma.stockHandover.findFirst({
       where: { status: { not: 'CLOSED' } },
       select: { id: true },
     });
     if (openBarman) {
       throw new BadRequestException(
-        'Count and close every barman stock batch before settling with the owner.',
+        'Count and close every barman stock batch before closing your stock.',
       );
     }
 
@@ -168,43 +165,9 @@ export class ManagerStockHandoversService {
     });
     if (unacceptedBarman) {
       throw new BadRequestException(
-        'Accept every barman\'s counted stock before settling with the owner.',
+        'Accept every barman\'s counted stock before closing your stock.',
       );
     }
-
-    const pending = await this.prisma.shift.findFirst({
-      where: {
-        userId: user.id,
-        status: ShiftStatus.CLOSED,
-        isSettle: true,
-        paidAt: null,
-      },
-      select: { id: true },
-    });
-    if (pending) {
-      throw new BadRequestException(
-        'The owner has not accepted your previous settle yet.',
-      );
-    }
-
-    const lastSettle = await this.prisma.shift.findFirst({
-      where: { userId: user.id, status: ShiftStatus.CLOSED, isSettle: true },
-      orderBy: { endedAt: 'desc' },
-      select: { endedAt: true },
-    });
-    const windowStart = lastSettle?.endedAt ?? new Date(0);
-    const now = new Date();
-
-    const moneyAgg = await this.prisma.shift.aggregate({
-      where: {
-        paidById: user.id,
-        paidAt: { gt: windowStart },
-        status: ShiftStatus.CLOSED,
-        user: { role: Role.CASHIER },
-      },
-      _sum: { expectedMoney: true },
-    });
-    const expectedMoney = this.toNumber(moneyAgg._sum?.expectedMoney);
 
     const openStock = await this.prisma.managerStockHandover.findFirst({
       where: { managerId: user.id, status: { not: 'CLOSED' } },
@@ -215,98 +178,64 @@ export class ManagerStockHandoversService {
       },
     });
 
-    const counts = new Map(dto.items.map((i) => [i.productId, i.countedQty]));
-    if (openStock) {
-      for (const item of openStock.items) {
-        if (!counts.has(item.productId)) {
-          throw new BadRequestException(
-            'Missing count for a product in your stock handover.',
-          );
-        }
-      }
-      for (const productId of counts.keys()) {
-        if (!openStock.items.some((i) => i.productId === productId)) {
-          throw new BadRequestException(
-            'Count includes a product not in your stock handover.',
-          );
-        }
-      }
-    } else if (dto.items.length > 0) {
-      throw new BadRequestException('There is no open manager stock to count.');
+    if (!openStock) {
+      throw new BadRequestException('There is no open manager stock to close.');
     }
 
-    const stockId: string | null = openStock?.id ?? null;
+    const counts = new Map(dto.items.map((i) => [i.productId, i.countedQty]));
+    for (const item of openStock.items) {
+      if (!counts.has(item.productId)) {
+        throw new BadRequestException(
+          'Missing count for a product in your stock handover.',
+        );
+      }
+    }
+    for (const productId of counts.keys()) {
+      if (!openStock.items.some((i) => i.productId === productId)) {
+        throw new BadRequestException(
+          'Count includes a product not in your stock handover.',
+        );
+      }
+    }
 
-    const shift = await this.prisma.$transaction(async (tx) => {
-      if (openStock) {
-        for (const item of openStock.items) {
-          const countedQty = counts.get(item.productId)!;
-          const givenAway = Number(item.givenAwayQty);
-          await tx.managerStockHandoverItem.update({
-            where: { id: item.id },
-            data: {
-              countedQty,
-              consumedQty: this.round(givenAway),
-              variance: this.round(
-                Number(item.givenQty) - givenAway - countedQty,
-              ),
-            },
-          });
-        }
-        await tx.managerStockHandover.update({
-          where: { id: openStock.id },
-          data: { status: 'CLOSED', closedAt: now, closedById: user.id },
-        });
-        await tx.managerStockHandoverEvent.create({
-          data: { handoverId: openStock.id, actorId: user.id, action: 'CLOSE' },
-        });
-        await tx.activityLog.create({
+    const now = new Date();
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const item of openStock.items) {
+        const countedQty = counts.get(item.productId)!;
+        const givenAway = Number(item.givenAwayQty);
+        await tx.managerStockHandoverItem.update({
+          where: { id: item.id },
           data: {
-            userId: user.id,
-            action: 'manager.handover.close',
-            entity: 'ManagerStockHandover',
-            entityId: openStock.id,
+            countedQty,
+            consumedQty: this.round(givenAway),
+            variance: this.round(
+              Number(item.givenQty) - givenAway - countedQty,
+            ),
           },
         });
       }
-
-      const created = await tx.shift.create({
-        data: {
-          userId: user.id,
-          status: ShiftStatus.CLOSED,
-          startedAt: lastSettle?.endedAt ?? now,
-          endedAt: now,
-          expectedMoney,
-          isSettle: true,
-        },
-        select: { id: true, expectedMoney: true },
+      await tx.managerStockHandover.update({
+        where: { id: openStock.id },
+        data: { status: 'CLOSED', closedAt: now, closedById: user.id },
+      });
+      await tx.managerStockHandoverEvent.create({
+        data: { handoverId: openStock.id, actorId: user.id, action: 'CLOSE' },
       });
       await tx.activityLog.create({
         data: {
           userId: user.id,
-          action: 'shift.settle',
-          entity: 'Shift',
-          entityId: created.id,
+          action: 'manager.handover.close',
+          entity: 'ManagerStockHandover',
+          entityId: openStock.id,
         },
       });
-      return {
-        id: created.id,
-        expectedMoney: this.toNumber(created.expectedMoney),
-      };
     });
 
-    if (stockId) {
-      this.emitChanged(stockId, user.id);
-    }
-    this.realtime.emitToRoles(
-      [Role.CASHIER, Role.MANAGER, Role.OWNER],
-      'shift.closed',
-      { shiftId: shift.id, userId: user.id },
-    );
+    this.emitChanged(openStock.id, user.id);
 
     return {
-      shift,
-      stock: stockId ? await this.findOne(stockId) : null,
+      stock: await this.findOne(openStock.id),
     };
   }
 
