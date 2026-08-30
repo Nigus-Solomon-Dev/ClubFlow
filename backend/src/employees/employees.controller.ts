@@ -19,7 +19,7 @@ export class EmployeesController {
   }
 
   @Patch(':id')
-  @Roles(Role.MANAGER)
+  @Roles(Role.MANAGER, Role.OWNER)
   update(
     @Param('id') id: string,
     @Body() dto: UpdateEmployeeDto,
