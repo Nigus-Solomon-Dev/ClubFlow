@@ -63,6 +63,12 @@ export class StockHandoversController {
     return this.stockHandoversService.alerts();
   }
 
+  @Get('summary')
+  @Roles(Role.MANAGER, Role.OWNER)
+  summary() {
+    return this.stockHandoversService.summary();
+  }
+
   @Get()
   @Roles(Role.MANAGER, Role.OWNER)
   list() {
