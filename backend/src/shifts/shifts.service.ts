@@ -68,6 +68,66 @@ export class ShiftsService {
     );
     return this.serialize(updated);
   }
+  async managerCashDrop(user: { id: string; role: string }) {
+    if (user.role !== Role.MANAGER) {
+      throw new BadRequestException('Only managers can drop cash to the owner');
+    }
+
+    const pending = await this.prisma.shift.findFirst({
+      where: {
+        userId: user.id,
+        status: ShiftStatus.CLOSED,
+        isSettle: true,
+        paidAt: null,
+      },
+      select: { id: true },
+    });
+    if (pending) {
+      throw new BadRequestException(
+        'The owner has not accepted your previous cash drop yet.',
+      );
+    }
+
+    const lastSettle = await this.prisma.shift.findFirst({
+      where: { userId: user.id, status: ShiftStatus.CLOSED, isSettle: true },
+      orderBy: { endedAt: 'desc' },
+      select: { endedAt: true },
+    });
+    const windowStart = lastSettle?.endedAt ?? new Date(0);
+    const now = new Date();
+
+    const moneyAgg = await this.prisma.shift.aggregate({
+      where: {
+        paidById: user.id,
+        paidAt: { gt: windowStart },
+        status: ShiftStatus.CLOSED,
+        user: { role: Role.CASHIER },
+      },
+      _sum: { expectedMoney: true },
+    });
+    const expectedMoney = this.toNumber(moneyAgg._sum?.expectedMoney);
+
+    const created = await this.prisma.shift.create({
+      data: {
+        userId: user.id,
+        status: ShiftStatus.CLOSED,
+        startedAt: lastSettle?.endedAt ?? now,
+        endedAt: now,
+        expectedMoney,
+        isSettle: true,
+      },
+    });
+
+    await this.logShift(user.id, 'shift.settle', created.id);
+
+    this.realtime.emitToRoles(
+      [Role.CASHIER, Role.MANAGER, Role.OWNER],
+      'shift.closed',
+      { shiftId: created.id, userId: user.id },
+    );
+
+    return this.serialize(created);
+  }
 
   async accept(shiftId: string, actor: { id: string; role: string }) {
     const shift = await this.prisma.shift.findUnique({
