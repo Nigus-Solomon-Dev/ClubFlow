@@ -32,6 +32,12 @@ export class ShiftsController {
     return this.shiftsService.close(user.id, user.role);
   }
 
+  @Post('manager-drop')
+  @Roles(Role.MANAGER)
+  managerDrop(@CurrentUser() user: { id: string; role: string }) {
+    return this.shiftsService.managerCashDrop(user);
+  }
+
   @Post(':id/accept')
   @Roles(Role.CASHIER, Role.MANAGER, Role.OWNER)
   accept(
