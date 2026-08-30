@@ -24,10 +24,9 @@ const NAV: NavItem[] = [
   { href: '/history', label: 'History', roles: ['WAITER', 'BARMAN', 'CASHIER'] },
   { href: '/handover', label: 'Stock handover', roles: ['MANAGER', 'OWNER'] },
   { href: '/settlements', label: 'End of day', roles: ['CASHIER', 'MANAGER', 'OWNER'] },
-  { href: '/menu', label: 'Products', roles: ['MANAGER'] },
-  { href: '/tables', label: 'Tables', roles: ['MANAGER'] },
-  { href: '/inventory', label: 'Stock', roles: ['MANAGER'] },
-  { href: '/employees', label: 'Employees', roles: ['MANAGER'] },
+  { href: '/menu', label: 'Products', roles: ['OWNER'] },
+  { href: '/tables', label: 'Tables', roles: ['MANAGER', 'OWNER'] },
+  { href: '/employees', label: 'Employees', roles: ['MANAGER', 'OWNER'] },
   { href: '/shifts', label: 'Shifts', roles: ['OWNER', 'MANAGER', 'CASHIER', 'BARMAN', 'WAITER'] },
   { href: '/reports', label: 'Reports', roles: ['OWNER', 'MANAGER'] },
 ];
