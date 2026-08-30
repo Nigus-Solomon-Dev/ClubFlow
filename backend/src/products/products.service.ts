@@ -11,8 +11,8 @@ import { UpdateProductDto } from './dto/update-product.dto';
 export class ProductsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll() {
-    return this.prisma.product.findMany({
+  async findAll() {
+    const products = await this.prisma.product.findMany({
       include: {
         category: true,
         inventory: true,
@@ -20,6 +20,21 @@ export class ProductsService {
       },
       orderBy: { name: 'asc' },
     });
+    for (const p of products) {
+      const isAlcohol = p.category?.name === 'Alcohol' || p.sellingUnits?.some((u) => ['bottle', 'half', 'double', 'shot'].includes(u.name.toLowerCase()));
+      if (isAlcohol && p.stockUnit !== 'Bottle') {
+        p.stockUnit = 'Bottle';
+        this.prisma.product.update({
+          where: { id: p.id },
+          data: { stockUnit: 'Bottle' },
+        }).catch(() => {});
+        this.prisma.inventory.updateMany({
+          where: { productId: p.id, unit: 'Piece' },
+          data: { unit: 'Bottle' },
+        }).catch(() => {});
+      }
+    }
+    return products;
   }
 
   async findOne(id: string) {
@@ -34,6 +49,18 @@ export class ProductsService {
     if (!product) {
       throw new NotFoundException('Product not found');
     }
+    const isAlcohol = product.category?.name === 'Alcohol' || product.sellingUnits?.some((u) => ['bottle', 'half', 'double', 'shot'].includes(u.name.toLowerCase()));
+    if (isAlcohol && product.stockUnit !== 'Bottle') {
+      product.stockUnit = 'Bottle';
+      this.prisma.product.update({
+        where: { id: product.id },
+        data: { stockUnit: 'Bottle' },
+      }).catch(() => {});
+      this.prisma.inventory.updateMany({
+        where: { productId: product.id, unit: 'Piece' },
+        data: { unit: 'Bottle' },
+      }).catch(() => {});
+    }
     return product;
   }
 
@@ -45,17 +72,32 @@ export class ProductsService {
       if (!category) {
         throw new NotFoundException('Category not found');
       }
+      const isAlcohol = category.name === 'Alcohol';
+      const stockUnit = dto.unit ?? (isAlcohol ? 'Bottle' : 'Piece');
       const product = await tx.product.create({
         data: {
           name: dto.name,
           categoryId: dto.categoryId,
           price: dto.price,
           isAvailable: dto.isAvailable ?? true,
+          piecesPerCase: dto.piecesPerCase ?? 24,
+          stockUnit: stockUnit,
         },
       });
       await tx.inventory.create({
-        data: { productId: product.id, quantity: 0, unit: dto.unit ?? 'unit' },
+        data: { productId: product.id, quantity: dto.initialPieces ?? 0, unit: stockUnit },
       });
+      if (dto.sellingUnits?.length) {
+        await tx.sellingUnit.createMany({
+          data: dto.sellingUnits.map((su) => ({
+            productId: product.id,
+            name: su.name,
+            price: su.price,
+            stockConsumption: su.stockConsumption,
+            isDefault: su.isDefault,
+          })),
+        });
+      }
       return tx.product.findUnique({
         where: { id: product.id },
         include: {
@@ -77,14 +119,29 @@ export class ProductsService {
         throw new NotFoundException('Category not found');
       }
     }
-    return this.prisma.product.update({
-      where: { id },
-      data: dto,
-      include: {
-        category: true,
-        inventory: true,
-        sellingUnits: { orderBy: { price: 'asc' } },
-      },
+    return this.prisma.$transaction(async (tx) => {
+      if (dto.sellingUnits) {
+        await tx.sellingUnit.deleteMany({ where: { productId: id } });
+        await tx.sellingUnit.createMany({
+          data: dto.sellingUnits.map((su) => ({
+            productId: id,
+            name: su.name,
+            price: su.price,
+            stockConsumption: su.stockConsumption,
+            isDefault: su.isDefault,
+          })),
+        });
+      }
+      const { sellingUnits, ...productData } = dto;
+      return tx.product.update({
+        where: { id },
+        data: productData,
+        include: {
+          category: true,
+          inventory: true,
+          sellingUnits: { orderBy: { price: 'asc' } },
+        },
+      });
     });
   }
 
