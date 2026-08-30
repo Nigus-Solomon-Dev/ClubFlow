@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { OrderStatus } from '../../generated/prisma/client';
+import { OrderStatus, Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -14,14 +14,13 @@ export class ManagerService {
     const [
       todayOrderCount,
       todaySales,
-      productCount,
       categoryCount,
       tableCount,
       activeTableCount,
       openShiftCount,
-      lowStock,
       pendingCount,
       userCount,
+      managerStockSummary,
     ] = await Promise.all([
       this.prisma.order.count({ where: { createdAt: { gte: startOfToday } } }),
       this.prisma.order.aggregate({
@@ -31,20 +30,19 @@ export class ManagerService {
         },
         _sum: { totalPrice: true },
       }),
-      this.prisma.product.count(),
       this.prisma.category.count(),
       this.prisma.restaurantTable.count(),
       this.prisma.restaurantTable.count({ where: { isActive: true } }),
       this.prisma.shift.count({
         where: { status: 'OPEN' as never },
       }),
-      this.prisma.inventory.count({ where: { quantity: { lt: 5 } } }),
       this.prisma.order.count({
         where: {
           status: { in: [OrderStatus.DRAFT, OrderStatus.SENT] },
         },
       }),
       this.prisma.user.count(),
+      this.getManagerStockSummary(),
     ]);
 
     return {
@@ -53,15 +51,50 @@ export class ManagerService {
         revenue: todaySales._sum?.totalPrice ?? null,
       },
       totals: {
-        products: productCount,
+        products: managerStockSummary.productCount,
         categories: categoryCount,
         tables: tableCount,
         activeTables: activeTableCount,
         employees: userCount,
         openShifts: openShiftCount,
-        lowStockItems: lowStock,
+        lowStockItems: managerStockSummary.lowStockCount,
         pendingOrders: pendingCount,
       },
     };
+  }
+
+  private async getManagerStockSummary() {
+    const openHandovers = await this.prisma.managerStockHandover.findMany({
+      where: { status: { not: 'CLOSED' } },
+      include: {
+        items: {
+          select: {
+            productId: true,
+            givenQty: true,
+            givenAwayQty: true,
+            product: { select: { id: true, stockUnit: true, piecesPerCase: true } },
+          },
+        },
+      },
+    });
+
+    let productCount = 0;
+    let lowStockCount = 0;
+
+    for (const h of openHandovers) {
+      for (const item of h.items) {
+        const left = Number(item.givenQty) - Number(item.givenAwayQty);
+        if (left > 0) {
+          // Count distinct products with positive balance
+          productCount++;
+          // Low stock threshold: < 5 stock units (or < 5 pieces for Piece-type)
+          if (left < 5) {
+            lowStockCount++;
+          }
+        }
+      }
+    }
+
+    return { productCount, lowStockCount };
   }
 }
