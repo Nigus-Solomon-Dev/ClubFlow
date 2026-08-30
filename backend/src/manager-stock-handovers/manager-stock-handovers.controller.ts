@@ -22,14 +22,14 @@ export class ManagerStockHandoversController {
     return this.managerStockHandoversService.give(userId, dto);
   }
 
-  // Manager clock out / settle with the owner: money + stock in one action.
-  @Post('settle')
+  // Manager closes their stock batch with a physical count.
+  @Post('close')
   @Roles(Role.MANAGER)
-  settle(
+  close(
     @CurrentUser() user: { id: string; role: string },
     @Body() dto: SettleManagerStockDto,
   ) {
-    return this.managerStockHandoversService.settle(user, dto);
+    return this.managerStockHandoversService.closeStock(user, dto);
   }
 
   // Owner accepts the manager's closed stock batch after counting it.
