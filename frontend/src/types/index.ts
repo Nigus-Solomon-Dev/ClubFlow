@@ -68,6 +68,15 @@ export interface Inventory {
   product?: Product;
 }
 
+export interface ProductStockSummary {
+  productId: string;
+  name: string;
+  stockUnit: string;
+  barman: number;
+  manager: number;
+  total: number;
+}
+
 export interface RestaurantTable {
   id: string;
   name: string;
