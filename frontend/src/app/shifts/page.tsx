@@ -48,6 +48,7 @@ export default function ShiftsPage() {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      setTimeout(() => setError(null), 3500);
     }
   }
 
@@ -62,6 +63,7 @@ export default function ShiftsPage() {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      setTimeout(() => setError(null), 3500);
     }
   }
 
@@ -81,6 +83,7 @@ export default function ShiftsPage() {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to accept');
+      setTimeout(() => setError(null), 3500);
     } finally {
       setBusy(false);
     }
