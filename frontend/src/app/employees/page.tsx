@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import { Alert, Badge, Button, Card, EmptyState, Input } from '@/components/ui';
+import { useAuth } from '@/context/AuthContext';
 import { api } from '@/services/api';
 import type { Employee } from '@/types';
 
@@ -68,9 +69,16 @@ function EditableName({
 }
 
 export default function EmployeesPage() {
+  const { user } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  const [newName, setNewName] = useState('');
+  const [newPhone, setNewPhone] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newRole, setNewRole] = useState<Employee['role']>('WAITER');
+  const [isRegistering, setIsRegistering] = useState(false);
 
   const reload = useCallback(() => {
     api
@@ -90,6 +98,7 @@ export default function EmployeesPage() {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      setTimeout(() => setError(null), 3500);
     }
   }
 
@@ -106,12 +115,40 @@ export default function EmployeesPage() {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update name');
+      setTimeout(() => setError(null), 3500);
       throw e;
     }
   }
 
   const tone = (role: string): 'blue' | 'amber' | 'neutral' =>
     role === 'MANAGER' ? 'blue' : role === 'CASHIER' || role === 'BARMAN' ? 'amber' : 'neutral';
+
+  async function registerEmployee(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newName.trim() || !newPhone.trim()) return;
+    
+    setIsRegistering(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await api.register({
+        name: newName.trim(),
+        phone: newPhone.trim(),
+        password: newPassword,
+        role: newRole,
+      });
+      setNotice('Employee registered successfully.');
+      setNewName('');
+      setNewPhone('');
+      setNewPassword('');
+      setNewRole('WAITER');
+      reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Registration failed');
+    } finally {
+      setIsRegistering(false);
+    }
+  }
 
   return (
     <AppShell>
@@ -122,6 +159,42 @@ export default function EmployeesPage() {
           {notice}
         </div>
       ) : null}
+
+      <Card title="Add new employee" className="mb-6 max-w-xl">
+        <form onSubmit={registerEmployee} className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-zinc-700">Name</label>
+              <Input value={newName} onChange={(e) => setNewName(e.target.value)} required />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-zinc-700">Phone</label>
+              <Input type="tel" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} required />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-zinc-700">Password (optional)</label>
+              <Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Default: 123456" />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-zinc-700">Role</label>
+              <select
+                className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                value={newRole}
+                onChange={(e) => setNewRole(e.target.value as Employee['role'])}
+              >
+                <option value="WAITER">Waiter</option>
+                <option value="BARMAN">Barman</option>
+                <option value="CASHIER">Cashier</option>
+                <option value="MANAGER">Manager</option>
+                {user?.role === 'OWNER' && <option value="OWNER">Owner</option>}
+              </select>
+            </div>
+          </div>
+          <Button type="submit" disabled={isRegistering}>
+            {isRegistering ? 'Registering...' : 'Register Employee'}
+          </Button>
+        </form>
+      </Card>
 
       {employees.length === 0 ? (
         <EmptyState>No employees yet.</EmptyState>
