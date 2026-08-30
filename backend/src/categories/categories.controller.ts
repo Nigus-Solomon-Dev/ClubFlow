@@ -18,16 +18,18 @@ import { UpdateCategoryDto } from './dto/update-category.dto';
 
 @Controller('api/categories')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.MANAGER)
+@Roles(Role.MANAGER, Role.OWNER)
 export class CategoriesController {
   constructor(private readonly categoriesService: CategoriesService) {}
 
   @Get()
+  @Roles(Role.MANAGER, Role.OWNER, Role.WAITER, Role.BARMAN, Role.CASHIER)
   findAll() {
     return this.categoriesService.findAll();
   }
 
   @Get(':id')
+  @Roles(Role.MANAGER, Role.OWNER, Role.WAITER, Role.BARMAN, Role.CASHIER)
   findOne(@Param('id') id: string) {
     return this.categoriesService.findOne(id);
   }
