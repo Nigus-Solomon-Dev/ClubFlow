@@ -4,11 +4,8 @@ import { useEffect, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import AuditPanel from '@/components/AuditPanel';
 import { Badge, Card, EmptyState, StatCard } from '@/components/ui';
-import DateText from '@/components/DateText';
 import { api } from '@/services/api';
 import type {
-  ActivityEntry,
-  CancellationReport,
   CategorySales,
   DailySales,
   EmployeeReport,
@@ -30,8 +27,6 @@ export default function ReportsPage() {
   const [employees, setEmployees] = useState<EmployeeReport[]>([]);
   const [monthly, setMonthly] = useState<MonthlySales[]>([]);
   const [usage, setUsage] = useState<InventoryUsage[]>([]);
-  const [cancellations, setCancellations] = useState<CancellationReport | null>(null);
-  const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -45,10 +40,8 @@ export default function ReportsPage() {
       api.employeeReport(),
       api.monthlySales(),
       api.inventoryUsage(),
-      api.cancellationReport(),
-      api.activity(20),
     ])
-      .then(([s, c, t, l, d, w, e, m, u, cc, a]) => {
+      .then(([s, c, t, l, d, w, e, m, u]) => {
         setSales(s);
         setCategories(c);
         setTop(t);
@@ -58,8 +51,6 @@ export default function ReportsPage() {
         setEmployees(e);
         setMonthly(m);
         setUsage(u);
-        setCancellations(cc);
-        setActivity(a);
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'));
   }, []);
@@ -260,35 +251,6 @@ export default function ReportsPage() {
                 </ul>
               )}
             </Card>
-
-            <Card title="Cancellations">
-              {!cancellations || cancellations.totalRequests === 0 ? (
-                <EmptyState>No cancellations recorded.</EmptyState>
-              ) : (
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between rounded-lg bg-zinc-100 px-3 py-2">
-                    <span className="text-zinc-600">Total requests</span>
-                    <span className="font-semibold text-zinc-900">{cancellations.totalRequests}</span>
-                  </div>
-                  <div className="flex justify-between rounded-lg bg-amber-50 px-3 py-2">
-                    <span className="text-amber-700">Pending</span>
-                    <span className="font-semibold text-amber-900">{cancellations.pending}</span>
-                  </div>
-                  <div className="flex justify-between rounded-lg bg-green-50 px-3 py-2">
-                    <span className="text-green-700">Approved</span>
-                    <span className="font-semibold text-green-900">{cancellations.approved}</span>
-                  </div>
-                  <div className="flex justify-between rounded-lg bg-red-50 px-3 py-2">
-                    <span className="text-red-700">Rejected</span>
-                    <span className="font-semibold text-red-900">{cancellations.rejected}</span>
-                  </div>
-                  <div className="mt-2 flex justify-between rounded-lg bg-zinc-900 px-3 py-2 text-white">
-                    <span>Approved value (lost)</span>
-                    <span className="font-bold">{cancellations.approvedValue.toFixed(2)}</span>
-                  </div>
-                </div>
-              )}
-            </Card>
           </div>
 
           <div className="mt-6">
@@ -318,28 +280,6 @@ export default function ReportsPage() {
                     </tbody>
                   </table>
                 </div>
-              )}
-            </Card>
-          </div>
-
-          <div className="mt-6">
-            <Card title="Recent activity">
-              {activity.length === 0 ? (
-                <EmptyState>No activity recorded.</EmptyState>
-              ) : (
-                <ul className="space-y-2 text-sm">
-                  {activity.map((a) => (
-                    <li key={a.id} className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate font-mono text-xs text-zinc-700">{a.action}</p>
-                        <p className="text-xs text-zinc-400">{a.user?.name ?? 'System'}</p>
-                      </div>
-                      <span className="shrink-0 text-xs text-zinc-400">
-                          <DateText value={a.createdAt} />
-                        </span>
-                    </li>
-                  ))}
-                </ul>
               )}
             </Card>
           </div>
