@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import ClockInGate from '@/components/ClockInGate';
-import { OrderRow } from '@/components/orders';
+import { OrderRow, isToday } from '@/components/orders';
 import { Alert, Button, Card, EmptyState } from '@/components/ui';
 import { useAuth } from '@/context/AuthContext';
 import { useRealtime } from '@/hooks/useRealtime';
@@ -158,6 +158,7 @@ function WaiterPos({ onChanged }: { onChanged: () => void }) {
       onChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to send order');
+      setTimeout(() => setError(null), 3500);
     }
   }
 
@@ -312,6 +313,11 @@ function StaffPos() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [dismissedOrderIds, setDismissedOrderIds] = useState<string[]>([]);
+  const [outOfStockOrder, setOutOfStockOrder] = useState<{
+    order: Order;
+    message: string;
+  } | null>(null);
   const isBarman = user?.role === 'BARMAN';
 
   const reload = useCallback(() => {
@@ -330,28 +336,63 @@ function StaffPos() {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Action failed');
+      setTimeout(() => setError(null), 3500);
     }
   }
 
-  const sent = useMemo(() => orders.filter((o) => o.status === 'SENT'), [orders]);
+  async function handleCompleteOrder(order: Order) {
+    setError(null);
+    try {
+      await api.completeOrder(order.id);
+      reload();
+    } catch (e) {
+      const msg =
+        e instanceof Error
+          ? e.message
+          : "You don't have this stock handed over.";
+      setOutOfStockOrder({ order, message: msg });
+    }
+  }
+
+  function dismissOutOfStockModal() {
+    if (outOfStockOrder) {
+      setDismissedOrderIds((prev) => [...prev, outOfStockOrder.order.id]);
+      setOutOfStockOrder(null);
+    }
+  }
+
+  const sent = useMemo(
+    () =>
+      orders.filter(
+        (o) =>
+          o.status === 'SENT' &&
+          isToday(o.createdAt) &&
+          !dismissedOrderIds.includes(o.id),
+      ),
+    [orders, dismissedOrderIds],
+  );
 
   const barmanPending = useMemo(
     () =>
-      orders.flatMap((o) =>
-        (o.cancellationRequests ?? [])
-          .filter((r) => r.status === 'PENDING' && !r.barmanId)
-          .map((r) => ({ order: o, request: r })),
-      ),
+      orders
+        .filter((o) => isToday(o.createdAt))
+        .flatMap((o) =>
+          (o.cancellationRequests ?? [])
+            .filter((r) => r.status === 'PENDING' && !r.barmanId)
+            .map((r) => ({ order: o, request: r })),
+        ),
     [orders],
   );
 
   const barmanEdits = useMemo(
     () =>
-      orders.flatMap((o) =>
-        (o.editRequests ?? [])
-          .filter((r) => r.status === 'PENDING')
-          .map((r) => ({ order: o, request: r })),
-      ),
+      orders
+        .filter((o) => isToday(o.createdAt))
+        .flatMap((o) =>
+          (o.editRequests ?? [])
+            .filter((r) => r.status === 'PENDING')
+            .map((r) => ({ order: o, request: r })),
+        ),
     [orders],
   );
 
@@ -383,7 +424,7 @@ function StaffPos() {
                       </ul>
                       <Button
                         className="mt-3 w-full"
-                        onClick={() => act(() => api.completeOrder(o.id))}
+                        onClick={() => handleCompleteOrder(o)}
                       >
                         Complete order
                       </Button>
@@ -493,6 +534,45 @@ function StaffPos() {
           </Card>
         </>
       )}
+
+      {outOfStockOrder ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-md rounded-2xl border border-red-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-red-100 text-2xl">
+                ⚠️
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-zinc-900">
+                  Out of Stock!
+                </h3>
+                <p className="text-xs font-semibold uppercase tracking-wider text-red-600">
+                  Order #{outOfStockOrder.order.orderNumber}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-red-100 bg-red-50 p-4">
+              <p className="text-sm font-semibold text-red-900">
+                {outOfStockOrder.message}
+              </p>
+              <p className="mt-2 text-xs text-red-700 leading-relaxed">
+                You do not have this stock handed over. Please notify the waiter ({outOfStockOrder.order.waiter?.name ?? 'Waiter'}) or ask the Manager to give you stock first.
+              </p>
+            </div>
+
+            <div className="mt-5">
+              <Button
+                variant="primary"
+                className="w-full bg-red-600 py-3 text-base font-semibold text-white hover:bg-red-700"
+                onClick={dismissOutOfStockModal}
+              >
+                I Understand — Remove from List
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
