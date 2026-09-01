@@ -2,15 +2,18 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { canAccess, useAuth } from '../context/AuthContext';
 import { useHydrated } from '../hooks';
-import { LiveToasts } from './LiveToasts';
+import { useRealtime } from '../hooks/useRealtime';
+import { api } from '../services/api';
 import {
+  REAL_TIME_EVENTS,
   subscribeConnectionStatus,
   type ConnectionStatus,
 } from '../services/realtime';
-import type { AuthUser, Role } from '../types';
+import type { AuthUser, Role, Shift } from '../types';
+import { LiveToasts } from './LiveToasts';
 
 interface NavItem {
   href: string;
@@ -34,16 +37,31 @@ const NAV: NavItem[] = [
 function SidebarNav({
   items,
   pathname,
+  isLocked,
   onNavigate,
 }: {
   items: NavItem[];
   pathname: string;
+  isLocked?: boolean;
   onNavigate?: () => void;
 }) {
   return (
     <nav className="flex-1 space-y-1 p-3">
       {items.map((item) => {
         const active = pathname === item.href;
+        const locked = isLocked && item.href !== '/shifts';
+        if (locked) {
+          return (
+            <div
+              key={item.href}
+              className="flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium text-zinc-400 cursor-not-allowed opacity-50 select-none"
+              title="Clock in to unlock"
+            >
+              <span>{item.label}</span>
+              <span className="text-xs">🔒</span>
+            </div>
+          );
+        }
         return (
           <Link
             key={item.href}
@@ -91,11 +109,55 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const hydrated = useHydrated();
   const [open, setOpen] = useState(false);
   const [wsStatus, setWsStatus] = useState<ConnectionStatus>('connecting');
+  const [shifts, setShifts] = useState<Shift[]>([]);
+  const [shiftLoaded, setShiftLoaded] = useState(false);
 
   useEffect(() => subscribeConnectionStatus(setWsStatus), []);
 
+  const isFrontline =
+    user?.role === 'WAITER' ||
+    user?.role === 'BARMAN' ||
+    user?.role === 'CASHIER';
+
+  const reloadShifts = useCallback(() => {
+    if (!user) return;
+    api
+      .shifts()
+      .then((s) => {
+        setShifts(s);
+        setShiftLoaded(true);
+      })
+      .catch(() => setShiftLoaded(true));
+  }, [user]);
+
+  useEffect(() => {
+    reloadShifts();
+    const onShiftChanged = () => reloadShifts();
+    window.addEventListener('shift-status-changed', onShiftChanged);
+    return () => {
+      window.removeEventListener('shift-status-changed', onShiftChanged);
+    };
+  }, [reloadShifts]);
+
+  useRealtime(
+    [
+      REAL_TIME_EVENTS.shiftOpened,
+      REAL_TIME_EVENTS.shiftClosed,
+      REAL_TIME_EVENTS.shiftAccepted,
+    ],
+    reloadShifts,
+  );
+
+  const hasOpenShift = shifts.some((s) => s.status === 'OPEN');
+  const isLocked = isFrontline && shiftLoaded && !hasOpenShift;
+
   const roleHome =
-    user?.role === 'MANAGER' || user?.role === 'OWNER' ? '/dashboard' : '/pos';
+    user?.role === 'MANAGER' || user?.role === 'OWNER'
+      ? '/dashboard'
+      : hasOpenShift
+      ? '/pos'
+      : '/shifts';
+
   const allowedPaths = NAV.filter((n) => canAccess(user?.role, n.roles)).map(
     (n) => n.href,
   );
@@ -108,8 +170,22 @@ export default function AppShell({ children }: { children: ReactNode }) {
     }
     if (!allowedPaths.includes(pathname)) {
       router.replace(roleHome);
+      return;
     }
-  }, [user, router, hydrated, pathname, allowedPaths, roleHome]);
+    if (isFrontline && shiftLoaded && !hasOpenShift && pathname !== '/shifts') {
+      router.replace('/shifts');
+    }
+  }, [
+    user,
+    router,
+    hydrated,
+    pathname,
+    allowedPaths,
+    roleHome,
+    isFrontline,
+    shiftLoaded,
+    hasOpenShift,
+  ]);
 
   async function handleLogout() {
     await logout();
@@ -162,7 +238,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 ✕
               </button>
             </div>
-            <SidebarNav items={items} pathname={pathname} onNavigate={() => setOpen(false)} />
+            <SidebarNav
+              items={items}
+              pathname={pathname}
+              isLocked={isLocked}
+              onNavigate={() => setOpen(false)}
+            />
             <UserPanel user={user} onLogout={handleLogout} />
           </div>
         </div>
@@ -174,7 +255,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
           <p className="text-base font-bold text-zinc-900">Restaurant</p>
           <p className="text-xs text-zinc-500">Management Suite</p>
         </div>
-        <SidebarNav items={items} pathname={pathname} />
+        <SidebarNav items={items} pathname={pathname} isLocked={isLocked} />
         <UserPanel user={user} onLogout={handleLogout} />
       </aside>
 
@@ -190,6 +271,19 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </span>
           </div>
         ) : null}
+
+        {isLocked && pathname === '/shifts' ? (
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-200 bg-white p-3.5 shadow-sm text-sm text-zinc-700">
+            <div className="flex items-center gap-2.5">
+              <span className="text-base">🔒</span>
+              <span>Please <strong>Clock in</strong> below to start your shift and unlock your features.</span>
+            </div>
+            <span className="rounded-full border border-zinc-200 bg-zinc-100 px-2.5 py-0.5 text-xs font-semibold text-zinc-600">
+              Off duty
+            </span>
+          </div>
+        ) : null}
+
         {children}
       </main>
       <LiveToasts />

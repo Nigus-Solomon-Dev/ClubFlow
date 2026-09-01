@@ -257,6 +257,8 @@ export const api = {
   sendOrder: (id: string) => request<Order>(`/orders/${id}/send`, { method: 'POST' }),
   completeOrder: (id: string) =>
     request<Order>(`/orders/${id}/complete`, { method: 'POST' }),
+  rejectOutOfStock: (id: string) =>
+    request<Order>(`/orders/${id}/reject-out-of-stock`, { method: 'POST' }),
   requestCancellation: (id: string, reason?: string) =>
     request<CancellationRequest>(`/orders/${id}/cancel`, {
       method: 'POST',
@@ -286,10 +288,27 @@ export const api = {
     }),
 
   // Shifts
-  openShift: () => request<Shift>('/shifts/open', { method: 'POST' }),
-  closeShift: () => request<Shift>('/shifts/close', { method: 'POST' }),
-  acceptShift: (id: string) =>
-    request<Shift>(`/shifts/${id}/accept`, { method: 'POST' }),
+  openShift: async () => {
+    const s = await request<Shift>('/shifts/open', { method: 'POST' });
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('shift-status-changed', { detail: s }));
+    }
+    return s;
+  },
+  closeShift: async () => {
+    const s = await request<Shift>('/shifts/close', { method: 'POST' });
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('shift-status-changed', { detail: s }));
+    }
+    return s;
+  },
+  acceptShift: async (id: string) => {
+    const s = await request<Shift>(`/shifts/${id}/accept`, { method: 'POST' });
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('shift-status-changed', { detail: s }));
+    }
+    return s;
+  },
   shifts: () => request<Shift[]>('/shifts'),
   shiftsToday: () => request<Shift[]>('/shifts/today'),
 
