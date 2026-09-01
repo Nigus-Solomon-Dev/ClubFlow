@@ -2,9 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import AppShell from '@/components/AppShell';
+import { isToday } from '@/components/orders';
 import { Alert, Badge, Button, Card, EmptyState } from '@/components/ui';
 import { useAuth } from '@/context/AuthContext';
+import { useRealtime } from '@/hooks/useRealtime';
 import { api } from '@/services/api';
+import { REAL_TIME_EVENTS } from '@/services/realtime';
 import type { Role, Settlement, SettlementEntry, Shift } from '@/types';
 
 export default function SettlementsPage() {
@@ -34,9 +37,13 @@ export default function SettlementsPage() {
       .then(setToday)
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load'));
     if (canViewShifts) {
-      api
-        .shiftsToday()
-        .then(setShifts)
+      Promise.all([api.shifts(), api.shiftsToday()])
+        .then(([all, todayList]) => {
+          const map = new Map<string, Shift>();
+          all.forEach((s) => map.set(s.id, s));
+          todayList.forEach((s) => map.set(s.id, s));
+          setShifts(Array.from(map.values()));
+        })
         .catch(() => undefined);
     }
     if (canManage) {
@@ -48,6 +55,17 @@ export default function SettlementsPage() {
   }, [canViewShifts, canManage]);
 
   useEffect(reload, [reload]);
+
+  useRealtime(
+    [
+      REAL_TIME_EVENTS.shiftAccepted,
+      REAL_TIME_EVENTS.shiftClosed,
+      REAL_TIME_EVENTS.shiftOpened,
+      REAL_TIME_EVENTS.handoverChanged,
+      REAL_TIME_EVENTS.dashboardUpdated,
+    ],
+    reload,
+  );
 
   async function acceptShift(s: Shift) {
     setError(null);
@@ -82,42 +100,161 @@ export default function SettlementsPage() {
     }
   }
 
-  const remaining = (today?.expected ?? 0) - (today?.collected ?? 0);
+  const isCashier = user?.role === 'CASHIER';
+
+  const myOpenShift = useMemo(
+    () => shifts.find((s) => s.user?.id === user?.id && s.status === 'OPEN'),
+    [shifts, user],
+  );
+  const myUnacceptedClosed = useMemo(
+    () =>
+      shifts.find(
+        (s) =>
+          s.user?.id === user?.id &&
+          s.status === 'CLOSED' &&
+          !s.paidAt &&
+          isToday(s.endedAt ?? s.startedAt),
+      ),
+    [shifts, user],
+  );
+  const activeCashierShift = myOpenShift ?? myUnacceptedClosed;
+
+  const waiterShifts = useMemo(() => {
+    if (!isCashier) {
+      return shifts.filter(
+        (s) =>
+          s.user?.role === 'WAITER' && isToday(s.endedAt ?? s.startedAt),
+      );
+    }
+    // If cashier's shift was accepted by manager or cashier is off-duty, start 100% fresh (empty)
+    if (!activeCashierShift) return [];
+
+    const cashierStartTime = new Date(activeCashierShift.startedAt).getTime();
+    const cashierEndTime = activeCashierShift.endedAt
+      ? new Date(activeCashierShift.endedAt).getTime() + 10000
+      : Date.now() + 10000;
+
+    return shifts.filter((s) => {
+      if (s.user?.role !== 'WAITER') return false;
+      // If unpaid, show if from today
+      if (!s.paidAt) return isToday(s.endedAt ?? s.startedAt);
+      // If paid, only show if it was accepted in this active cashier shift cycle
+      const time = new Date(s.endedAt ?? s.startedAt).getTime();
+      return time >= cashierStartTime && time <= cashierEndTime;
+    });
+  }, [shifts, isCashier, activeCashierShift]);
+
+  const cashierExpected = useMemo(
+    () =>
+      waiterShifts.reduce(
+        (acc, s) => acc + Number(s.expectedMoney ?? 0),
+        0,
+      ),
+    [waiterShifts],
+  );
+  const cashierCollected = useMemo(
+    () =>
+      waiterShifts
+        .filter((s) => s.paidAt)
+        .reduce((acc, s) => acc + Number(s.expectedMoney ?? 0), 0),
+    [waiterShifts],
+  );
+
+  const totalExpected = isCashier ? cashierExpected : (today?.expected ?? 0);
+  const totalAccepted = isCashier ? cashierCollected : (today?.collected ?? 0);
+  const remaining = totalExpected - totalAccepted;
 
   const chain = useMemo(() => {
     const sum = (rows: Shift[]) =>
       rows.reduce((acc, r) => acc + Number(r.expectedMoney ?? 0), 0);
-    const waiters = shifts.filter((s) => s.user?.role === 'WAITER');
-    const cashiers = shifts.filter((s) => s.user?.role === 'CASHIER');
-    const managers = shifts.filter((s) => s.user?.role === 'MANAGER');
+
+    if (isCashier) {
+      if (!activeCashierShift) {
+        return [
+          {
+            label: 'Waiters gave to cashier (current cycle)',
+            given: 0,
+            outstanding: 0,
+          },
+          {
+            label: 'Cashier gave to manager (current cycle)',
+            given: 0,
+            outstanding: 0,
+          },
+        ];
+      }
+      const cashierGiven = activeCashierShift.paidAt
+        ? Number(activeCashierShift.expectedMoney ?? 0)
+        : 0;
+      const cashierOutstanding = !activeCashierShift.paidAt
+        ? Number(activeCashierShift.expectedMoney ?? 0)
+        : 0;
+
+      return [
+        {
+          label: 'Waiters gave to cashier (current shift)',
+          given: sum(waiterShifts.filter((s) => s.paidAt)),
+          outstanding: sum(waiterShifts.filter((s) => !s.paidAt)),
+        },
+        {
+          label: 'Cashier gave to manager (current shift)',
+          given: cashierGiven,
+          outstanding: cashierOutstanding,
+        },
+      ];
+    }
+
+    const todayWaiters = shifts.filter(
+      (s) => s.user?.role === 'WAITER' && isToday(s.endedAt ?? s.startedAt),
+    );
+    const todayCashiers = shifts.filter(
+      (s) => s.user?.role === 'CASHIER' && isToday(s.endedAt ?? s.startedAt),
+    );
+    const todayManagers = shifts.filter(
+      (s) => s.user?.role === 'MANAGER' && isToday(s.endedAt ?? s.startedAt),
+    );
+
     return [
       {
-        label: 'Waiters gave to cashier',
-        given: sum(waiters.filter((s) => s.paidAt)),
-        outstanding: sum(waiters.filter((s) => !s.paidAt)),
+        label: 'Waiters gave to cashier (today)',
+        given: sum(todayWaiters.filter((s) => s.paidAt)),
+        outstanding: sum(todayWaiters.filter((s) => !s.paidAt)),
       },
       {
-        label: 'Cashier gave to manager',
-        given: sum(cashiers.filter((s) => s.paidAt)),
-        outstanding: sum(cashiers.filter((s) => !s.paidAt)),
+        label: 'Cashier gave to manager (today)',
+        given: sum(todayCashiers.filter((s) => s.paidAt)),
+        outstanding: sum(todayCashiers.filter((s) => !s.paidAt)),
       },
       {
-        label: 'Manager gave to owner',
-        given: sum(managers.filter((s) => s.paidAt)),
-        outstanding: sum(managers.filter((s) => !s.paidAt)),
+        label: 'Manager gave to owner (today)',
+        given: sum(todayManagers.filter((s) => s.paidAt)),
+        outstanding: sum(todayManagers.filter((s) => !s.paidAt)),
       },
     ];
-  }, [shifts]);
+  }, [shifts, isCashier, activeCashierShift, waiterShifts]);
 
   const canAcceptRow = (s: Shift) =>
     canAccept &&
     s.user?.id !== user?.id &&
     acceptTargets[user!.role] === s.user?.role;
 
-  const pendingShifts = useMemo(
-    () => shifts.filter((s) => s.user?.role !== 'MANAGER'),
-    [shifts],
-  );
+  const pendingShifts = useMemo(() => {
+    if (user?.role === 'CASHIER') {
+      return waiterShifts;
+    }
+    if (user?.role === 'MANAGER') {
+      return shifts.filter(
+        (s) =>
+          (s.user?.role === 'CASHIER' || s.user?.role === 'WAITER') &&
+          isToday(s.endedAt ?? s.startedAt),
+      );
+    }
+    return shifts.filter((s) => s.user?.role !== 'OWNER');
+  }, [shifts, user, waiterShifts]);
+
+  const pastSettlement = useMemo(() => {
+    return history.length > 0 ? history[0] : null;
+  }, [history]);
 
   return (
     <AppShell>
@@ -152,18 +289,22 @@ export default function SettlementsPage() {
       ) : (
         <>
           <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-3">
-            <Stat tile="Total expected" value={today.expected.toFixed(2)} />
-            <Stat tile="Accepted" value={today.collected.toFixed(2)} tone="green" />
+            <Stat tile="Total expected" value={totalExpected.toFixed(2)} />
+            <Stat tile="Accepted" value={totalAccepted.toFixed(2)} tone="green" />
             <Stat
               tile="Remaining"
-              value={remaining.toFixed(2)}
+              value={Math.max(0, remaining).toFixed(2)}
               tone={remaining <= 0 ? 'green' : 'amber'}
             />
           </div>
 
           <Card title={today.isClosed ? 'Day closed — summary' : 'Money to give'}>
             {pendingShifts.length === 0 ? (
-              <EmptyState>No shifts closed yet today.</EmptyState>
+              <EmptyState>
+                {isCashier && !activeCashierShift
+                  ? 'No active shift cycle. All settled & fresh.'
+                  : 'No shifts waiting to be collected.'}
+              </EmptyState>
             ) : (
               <>
                 <ul className="divide-y divide-zinc-100">
@@ -229,51 +370,65 @@ export default function SettlementsPage() {
       )}
 
       {canViewShifts ? (
-        <Card title="Money chain — should tie" className="mt-6">
-          <ul className="space-y-2">
-            {chain.map((c) => (
-              <li
-                key={c.label}
-                className="flex flex-wrap items-center justify-between gap-2 text-sm"
-              >
-                <span className="font-medium text-zinc-900">{c.label}</span>
-                <span className="text-zinc-500">
-                  <span className="font-semibold text-zinc-900">
-                    {c.given.toFixed(2)}
-                  </span>{' '}
-                  given
-                  {c.outstanding > 0 ? (
-                    <span className="ml-2 font-medium text-amber-600">
-                      + {c.outstanding.toFixed(2)} outstanding
-                    </span>
-                  ) : null}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      ) : null}
-
-      {canManage ? (
-        <Card title="Recent settlements" className="mt-6">
-          {history.length === 0 ? (
-            <EmptyState>No settlement entries yet.</EmptyState>
-          ) : (
-            <ul className="divide-y divide-zinc-100">
-              {history.map((e) => (
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <Card title="Today's live money chain — should tie">
+            <ul className="space-y-3">
+              {chain.map((c) => (
                 <li
-                  key={e.id}
-                  className="flex items-center justify-between py-2 text-sm"
+                  key={c.label}
+                  className="flex flex-wrap items-center justify-between gap-2 text-sm border-b border-zinc-100 pb-2.5 last:border-0 last:pb-0"
                 >
-                  <span className="font-medium text-zinc-900">{e.employeeName}</span>
+                  <span className="font-medium text-zinc-900">{c.label}</span>
                   <span className="text-zinc-500">
-                    {e.expected.toFixed(2)} / {e.collected?.toFixed(2) ?? '—'}
+                    <span className="font-semibold text-zinc-900">
+                      {c.given.toFixed(2)}
+                    </span>{' '}
+                    given
+                    {c.outstanding > 0 ? (
+                      <span className="ml-2 font-medium text-amber-600">
+                        + {c.outstanding.toFixed(2)} outstanding
+                      </span>
+                    ) : (
+                      <span className="ml-2 font-medium text-green-600">
+                        (0.00 outstanding)
+                      </span>
+                    )}
                   </span>
                 </li>
               ))}
             </ul>
-          )}
-        </Card>
+          </Card>
+
+          {canManage && pastSettlement ? (
+            <Card title="Yesterday & past closed settlements">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs text-zinc-500 font-semibold uppercase tracking-wider">
+                  <span>Staff member</span>
+                  <span>Expected / Collected</span>
+                </div>
+                <ul className="divide-y divide-zinc-100 text-sm">
+                  {history.slice(0, 5).map((e) => (
+                    <li
+                      key={e.id}
+                      className="flex items-center justify-between py-2"
+                    >
+                      <span className="font-medium text-zinc-800">
+                        {e.employeeName}
+                      </span>
+                      <span className="text-zinc-600">
+                        {e.expected.toFixed(2)} /{' '}
+                        <span className="font-semibold text-green-700">
+                          {e.collected?.toFixed(2) ?? '—'}
+                        </span>{' '}
+                        ETB
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </Card>
+          ) : null}
+        </div>
       ) : null}
     </AppShell>
   );

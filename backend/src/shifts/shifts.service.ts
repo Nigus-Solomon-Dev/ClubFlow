@@ -31,10 +31,11 @@ export class ShiftsService {
     });
     await this.logShift(userId, 'shift.open', shift.id);
     this.realtime.emitToRoles(
-      [Role.WAITER, Role.MANAGER, Role.OWNER],
+      [Role.WAITER, Role.BARMAN, Role.CASHIER, Role.MANAGER, Role.OWNER],
       'shift.opened',
       { shiftId: shift.id, userId },
     );
+    this.realtime.emitToUser(userId, 'shift.opened', { shiftId: shift.id });
     return (await this.withExpectedMoney([shift]))[0];
   }
 
@@ -62,10 +63,11 @@ export class ShiftsService {
     });
     await this.logShift(userId, 'shift.close', shift.id);
     this.realtime.emitToRoles(
-      [Role.WAITER, Role.CASHIER, Role.MANAGER, Role.OWNER],
+      [Role.WAITER, Role.BARMAN, Role.CASHIER, Role.MANAGER, Role.OWNER],
       'shift.closed',
       { shiftId: shift.id, userId },
     );
+    this.realtime.emitToUser(userId, 'shift.closed', { shiftId: shift.id });
     return this.serialize(updated);
   }
   async managerCashDrop(user: { id: string; role: string }) {
@@ -181,6 +183,12 @@ export class ShiftsService {
       [Role.WAITER, Role.CASHIER, Role.MANAGER, Role.OWNER],
       'shift.accepted',
       { shiftId, userId: shift.userId },
+    );
+    this.realtime.emitToUser(shift.userId, 'shift.accepted', { shiftId });
+    this.realtime.emitToRoles(
+      [Role.CASHIER, Role.MANAGER, Role.OWNER],
+      'dashboard.updated',
+      {},
     );
     return this.serialize(updated);
   }

@@ -39,13 +39,13 @@ export class SettlementsService {
     const start = this.startOfToday();
     const end = this.endOfToday();
 
-    const grouped = await this.prisma.order.groupBy({
-      by: ['waiterId'],
+    const grouped = await this.prisma.shift.groupBy({
+      by: ['userId'],
       where: {
-        status: OrderStatus.COMPLETED,
-        createdAt: { gte: start, lt: end },
+        endedAt: { gte: start, lt: end },
+        user: { role: Role.WAITER },
       },
-      _sum: { totalPrice: true },
+      _sum: { expectedMoney: true },
     });
 
     const waiters = await this.prisma.user.findMany({
@@ -54,8 +54,11 @@ export class SettlementsService {
     });
 
     await Promise.all(
-      waiters.map((w) =>
-        this.prisma.settlementEntry.upsert({
+      waiters.map((w) => {
+        const exp = this.toNumber(
+          grouped.find((g) => g.userId === w.id)?._sum?.expectedMoney,
+        );
+        return this.prisma.settlementEntry.upsert({
           where: {
             settlementId_employeeId: {
               settlementId,
@@ -65,17 +68,13 @@ export class SettlementsService {
           create: {
             settlementId,
             employeeId: w.id,
-            expected: this.toNumber(
-              grouped.find((g) => g.waiterId === w.id)?._sum?.totalPrice,
-            ),
+            expected: exp,
           },
           update: {
-            expected: this.toNumber(
-              grouped.find((g) => g.waiterId === w.id)?._sum?.totalPrice,
-            ),
+            expected: exp,
           },
-        }),
-      ),
+        });
+      }),
     );
   }
 
