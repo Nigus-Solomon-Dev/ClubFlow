@@ -14,7 +14,7 @@ import { useRealtime } from '@/hooks/useRealtime';
 import { api } from '@/services/api';
 import { REAL_TIME_EVENTS } from '@/services/realtime';
 import StockItemsList from '@/components/stock/StockItemsList';
-import type { Order, StockHandover } from '@/types';
+import type { Order, StockHandover, Shift } from '@/types';
 
 export default function HistoryPage() {
   const { user } = useAuth();
@@ -88,6 +88,7 @@ function WaiterHistory() {
     () =>
       mine
         .filter((o) => {
+          if (o.status === 'CANCELLED') return false;
           if (!o.shift) return false;
           if (o.shift.status === 'OPEN') return true;
           return isToday(o.createdAt) && !o.shift.paidAt;
@@ -182,6 +183,7 @@ function BarmanStockCard() {
       REAL_TIME_EVENTS.handoverChanged,
       REAL_TIME_EVENTS.shiftClosed,
       REAL_TIME_EVENTS.shiftOpened,
+      REAL_TIME_EVENTS.shiftAccepted,
     ],
     reload,
   );
@@ -281,38 +283,79 @@ function BarmanStockCard() {
 
 function BarmanHistory() {
   const { orders, error, reload } = useOrders();
+  const [handovers, setHandovers] = useState<StockHandover[]>([]);
 
-  const today = useMemo(
-    () =>
-      orders
-        .filter(
-          (o) =>
-            (o.status === 'COMPLETED' && isToday(o.completedAt)) ||
-            (o.status === 'CANCELLED' && isToday(o.cancelledAt)),
-        )
-        .slice()
-        .sort(
-          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-        ),
-    [orders],
-  );
+  const reloadHandovers = useCallback(() => {
+    api
+      .stockHandoverMine()
+      .then(setHandovers)
+      .catch(() => {});
+  }, []);
+
+  const refreshAll = useCallback(() => {
+    reload();
+    reloadHandovers();
+  }, [reload, reloadHandovers]);
+
+  useEffect(() => {
+    reloadHandovers();
+  }, [reloadHandovers]);
 
   useRealtime(
-    [REAL_TIME_EVENTS.orderUpdated, REAL_TIME_EVENTS.handoverChanged],
-    reload,
+    [
+      REAL_TIME_EVENTS.orderUpdated,
+      REAL_TIME_EVENTS.handoverChanged,
+      REAL_TIME_EVENTS.shiftAccepted,
+      REAL_TIME_EVENTS.shiftClosed,
+      REAL_TIME_EVENTS.shiftOpened,
+    ],
+    refreshAll,
   );
+
+  const openHandover = handovers.find((h) => h.status === 'OPEN');
+  const unacceptedClosed = handovers.find(
+    (h) =>
+      h.status === 'CLOSED' &&
+      !h.acceptedAt &&
+      isToday(h.closedAt ?? h.openedAt),
+  );
+  const currentHandover = openHandover ?? unacceptedClosed;
+
+  const currentOrders = useMemo(() => {
+    if (!currentHandover) return [];
+    const shiftStart = new Date(currentHandover.openedAt).getTime();
+    const shiftEnd = currentHandover.closedAt
+      ? new Date(currentHandover.closedAt).getTime() + 10000
+      : Date.now() + 10000;
+    return orders
+      .filter((o) => {
+        if (o.status !== 'COMPLETED') return false;
+        if (!o.completedAt) return false;
+        const compTime = new Date(o.completedAt).getTime();
+        return compTime >= shiftStart && compTime <= shiftEnd;
+      })
+      .slice()
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+  }, [orders, currentHandover]);
 
   return (
     <div>
-      {error ? <div className="mb-4"><Alert>{error}</Alert></div> : null}
+      {error ? (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
+        </div>
+      ) : null}
 
       <BarmanStockCard />
 
-      <Card title="Today's orders">
-        {today.length === 0 ? (
-          <EmptyState>Nothing completed or cancelled today.</EmptyState>
+      <Card title="Current shift orders">
+        {currentOrders.length === 0 ? (
+          <EmptyState>No orders completed in current shift.</EmptyState>
         ) : (
-          <OrderTable orders={today} />
+          <OrderTable orders={currentOrders} />
         )}
       </Card>
     </div>
@@ -320,32 +363,81 @@ function BarmanHistory() {
 }
 
 function CashierHistory() {
-  const { orders, error } = useOrders();
+  const { user } = useAuth();
+  const { orders, error, reload } = useOrders();
+  const [shifts, setShifts] = useState<Shift[]>([]);
 
-  const today = useMemo(
-    () =>
-      orders
-        .filter(
-          (o) =>
-            (o.status === 'COMPLETED' && isToday(o.completedAt)) ||
-            (o.status === 'CANCELLED' && isToday(o.cancelledAt)),
-        )
-        .slice()
-        .sort(
-          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-        ),
-    [orders],
+  const reloadShifts = useCallback(() => {
+    api
+      .shifts()
+      .then(setShifts)
+      .catch(() => {});
+  }, []);
+
+  const refreshAll = useCallback(() => {
+    reload();
+    reloadShifts();
+  }, [reload, reloadShifts]);
+
+  useEffect(() => {
+    reloadShifts();
+  }, [reloadShifts]);
+
+  useRealtime(
+    [
+      REAL_TIME_EVENTS.orderUpdated,
+      REAL_TIME_EVENTS.shiftAccepted,
+      REAL_TIME_EVENTS.shiftClosed,
+      REAL_TIME_EVENTS.shiftOpened,
+    ],
+    refreshAll,
   );
+
+  const myOpenShift = shifts.find(
+    (s) => s.user?.id === user?.id && s.status === 'OPEN',
+  );
+  const myUnacceptedClosed = shifts.find(
+    (s) =>
+      s.user?.id === user?.id &&
+      s.status === 'CLOSED' &&
+      !s.paidAt &&
+      isToday(s.endedAt ?? s.startedAt),
+  );
+  const activeShift = myOpenShift ?? myUnacceptedClosed;
+
+  const currentOrders = useMemo(() => {
+    if (!activeShift) return [];
+    const shiftStart = new Date(activeShift.startedAt).getTime();
+    const shiftEnd = activeShift.endedAt
+      ? new Date(activeShift.endedAt).getTime() + 10000
+      : Date.now() + 10000;
+    return orders
+      .filter((o) => {
+        if (o.status !== 'COMPLETED') return false;
+        if (!o.completedAt) return false;
+        const compTime = new Date(o.completedAt).getTime();
+        return compTime >= shiftStart && compTime <= shiftEnd;
+      })
+      .slice()
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+  }, [orders, activeShift]);
 
   return (
     <div>
-      {error ? <div className="mb-4"><Alert>{error}</Alert></div> : null}
+      {error ? (
+        <div className="mb-4">
+          <Alert>{error}</Alert>
+        </div>
+      ) : null}
 
-      <Card title="Today's orders">
-        {today.length === 0 ? (
-          <EmptyState>No completed or cancelled orders today.</EmptyState>
+      <Card title="Current shift orders">
+        {currentOrders.length === 0 ? (
+          <EmptyState>No orders in current shift. All approved &amp; settled.</EmptyState>
         ) : (
-          <OrderTable orders={today} />
+          <OrderTable orders={currentOrders} />
         )}
       </Card>
     </div>
