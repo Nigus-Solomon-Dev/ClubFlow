@@ -656,6 +656,38 @@ export class OrdersService {
     });
   }
 
+  async rejectOutOfStock(orderId: string, actorId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const order = await tx.order.findUnique({ where: { id: orderId } });
+      if (!order) {
+        throw new NotFoundException('Order not found');
+      }
+      if (order.status !== OrderStatus.SENT) {
+        throw new BadRequestException(
+          'Only orders waiting in the kitchen/bar can be rejected for out of stock',
+        );
+      }
+      const updated = await tx.order.update({
+        where: { id: orderId },
+        data: {
+          status: OrderStatus.CANCELLED,
+          cancelledAt: new Date(),
+        },
+      });
+      await tx.activityLog.create({
+        data: {
+          userId: actorId,
+          action: 'order.cancel.out_of_stock',
+          entity: 'Order',
+          entityId: orderId,
+        },
+      });
+      this.emitOrderRelated(orderId, 'order.updated');
+      this.emitOrderRelated(orderId, 'order.cancelled');
+      return updated;
+    });
+  }
+
   async proposeEdit(orderId: string, userId: string, dto: EditOrderDto) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },

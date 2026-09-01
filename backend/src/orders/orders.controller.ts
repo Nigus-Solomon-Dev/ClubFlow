@@ -144,6 +144,15 @@ export class OrdersController {
     return this.ordersService.complete(id, user.id, user.role);
   }
 
+  @Post(':id/reject-out-of-stock')
+  @Roles(Role.BARMAN, Role.MANAGER)
+  rejectOutOfStock(
+    @Param('id') id: string,
+    @CurrentUser('id') actorId: string,
+  ) {
+    return this.ordersService.rejectOutOfStock(id, actorId);
+  }
+
   @Post(':id/cancel')
   @Roles(Role.WAITER)
   requestCancellation(
