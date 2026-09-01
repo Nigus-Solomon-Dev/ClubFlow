@@ -7,9 +7,28 @@ export class ManagerService {
   constructor(private readonly prisma: PrismaService) {}
 
   async dashboard() {
-    const now = new Date();
-    const startOfToday = new Date(now);
-    startOfToday.setHours(0, 0, 0, 0);
+    const lastShift = await this.prisma.shift.findFirst({
+      where: { user: { role: 'MANAGER' }, isSettle: true, paidAt: { not: null } },
+      orderBy: { paidAt: 'desc' },
+      select: { paidAt: true },
+    });
+
+    const lastStock = await this.prisma.managerStockHandover.findFirst({
+      where: { acceptedAt: { not: null } },
+      orderBy: { acceptedAt: 'desc' },
+      select: { acceptedAt: true },
+    });
+
+    let cycleStart = new Date();
+    cycleStart.setHours(0, 0, 0, 0);
+
+    if (lastShift?.paidAt && lastStock?.acceptedAt) {
+      // The start of the current business cycle is when BOTH the last manager shift 
+      // and last manager stock were accepted.
+      const t1 = lastShift.paidAt.getTime();
+      const t2 = lastStock.acceptedAt.getTime();
+      cycleStart = new Date(Math.min(t1, t2));
+    }
 
     const [
       todayOrderCount,
@@ -22,11 +41,11 @@ export class ManagerService {
       userCount,
       managerStockSummary,
     ] = await Promise.all([
-      this.prisma.order.count({ where: { createdAt: { gte: startOfToday } } }),
+      this.prisma.order.count({ where: { createdAt: { gte: cycleStart } } }),
       this.prisma.order.aggregate({
         where: {
           status: OrderStatus.COMPLETED,
-          completedAt: { gte: startOfToday },
+          completedAt: { gte: cycleStart },
         },
         _sum: { totalPrice: true },
       }),
