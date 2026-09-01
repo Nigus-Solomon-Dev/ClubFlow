@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import AppShell from '@/components/AppShell';
 import DateText from '@/components/DateText';
@@ -12,6 +13,7 @@ import type { Shift } from '@/types';
 
 export default function ShiftsPage() {
   const { user } = useAuth();
+  const router = useRouter();
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -39,22 +41,28 @@ export default function ShiftsPage() {
     reload,
   );
 
-  async function run<T>(fn: () => Promise<T>, msg: string) {
+  async function handleClockIn() {
     setError(null);
     setNotice(null);
+    setBusy(true);
     try {
-      await fn();
-      setNotice(msg);
+      await api.openShift();
       reload();
+      if (!isManager) {
+        router.push('/pos');
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setError(e instanceof Error ? e.message : 'Failed to clock in');
       setTimeout(() => setError(null), 3500);
+    } finally {
+      setBusy(false);
     }
   }
 
   async function handleClose() {
     setError(null);
     setNotice(null);
+    setBusy(true);
     try {
       const s = await api.closeShift();
       setNotice(
@@ -64,6 +72,8 @@ export default function ShiftsPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
       setTimeout(() => setError(null), 3500);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -100,10 +110,10 @@ export default function ShiftsPage() {
         </div>
         {!isManager ? (
           <div className="flex gap-2">
-            <Button onClick={() => run(() => api.openShift(), 'Shift opened')} disabled={myOpen}>
+            <Button onClick={handleClockIn} disabled={myOpen || busy}>
               Clock in
             </Button>
-            <Button variant="secondary" onClick={handleClose} disabled={!myOpen}>
+            <Button variant="secondary" onClick={handleClose} disabled={!myOpen || busy}>
               Clock out
             </Button>
           </div>

@@ -354,10 +354,17 @@ function StaffPos() {
     }
   }
 
-  function dismissOutOfStockModal() {
+  async function dismissOutOfStockModal() {
     if (outOfStockOrder) {
-      setDismissedOrderIds((prev) => [...prev, outOfStockOrder.order.id]);
+      const orderId = outOfStockOrder.order.id;
+      setDismissedOrderIds((prev) => [...prev, orderId]);
       setOutOfStockOrder(null);
+      try {
+        await api.rejectOutOfStock(orderId);
+        reload();
+      } catch {
+        reload();
+      }
     }
   }
 
