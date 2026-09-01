@@ -941,6 +941,7 @@ function ManagerStockCloseCard({
 }
 
 function ManagerView() {
+  const { user } = useAuth();
   const [handovers, setHandovers] = useState<StockHandover[]>([]);
   const [managerHandovers, setManagerHandovers] = useState<ManagerStockHandover[]>([]);
   
@@ -1036,7 +1037,7 @@ function ManagerView() {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <GiveStockCard
-          products={products}
+          products={user?.role === 'OWNER' ? products : products.filter(p => managerHandovers.find(h => h.status === 'OPEN')?.items.some(i => i.productId === p.id))}
           barmans={barmans}
           openHandovers={openHandovers}
           onDutyIds={onDutyIds}
